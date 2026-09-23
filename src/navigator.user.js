@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.1.0
+// @version      0.2.0
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -23,7 +23,6 @@
   const ROUTE_CHECK_MS = 1000;
   const SCROLL_STEP_MS = 350;
   const SCROLL_STEP_RATIO = 0.75;
-
   const state = {
     ready: false,
     currentConversationId: null,
@@ -34,7 +33,6 @@
 
   let panel = null;
   let saveTimer = 0;
-
   class CopilotProvider {
     match() {
       return location.hostname.includes("m365.cloud.microsoft");
@@ -57,20 +55,33 @@
 
       nodes.forEach((node, nodeIndex) => {
         const rawIndex = node.getAttribute("data-message-index");
-        const index = Number.isNaN(Number(rawIndex)) ? nodeIndex : Number(rawIndex);
+        const parsedIndex = Number(rawIndex);
+        const index = Number.isFinite(parsedIndex) ? parsedIndex : nodeIndex;
         const user = node.querySelector('[data-testid="chatInput"], [data-testid="chatOutput"]');
         const assistant = node.querySelector('[data-testid="markdown-reply"]');
 
         if (user) {
-          messages.push(createMessage(index, "user", user.innerText.trim()));
+          const content = user.innerText.trim();
+          if (content) {
+            messages.push(createMessage(index, "user", content));
+          }
         }
 
         if (assistant) {
-          messages.push(createMessage(index, "assistant", assistant.innerText.trim()));
+          const content = assistant.innerText.trim();
+          if (content) {
+            messages.push(createMessage(index, "assistant", content));
+          }
         }
       });
 
       return messages;
+    }
+
+    getMountedIndexes() {
+      return new Set(Array.from(document.querySelectorAll(
+        '[data-testid="m365-chat-llm-web-ui-chat-message"][data-message-index]'
+      )).map((node) => Number(node.getAttribute("data-message-index"))));
     }
   }
 
@@ -103,17 +114,8 @@
       index,
       role,
       content,
-      key: `${index}|${role}|${hashText(content)}`
+      key: `${index}|${role}`
     };
-  }
-
-  function hashText(text) {
-    let hash = 2166136261;
-    for (let position = 0; position < text.length; position += 1) {
-      hash ^= text.charCodeAt(position);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(36);
   }
 
   function compressRanges(values) {
@@ -155,12 +157,22 @@
       return;
     }
 
+    const userIndexes = new Set(
+      session.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.index)
+    );
+    const assistantIndexes = new Set(
+      session.messages
+        .filter((message) => message.role === "assistant" && message.content.trim())
+        .map((message) => message.index)
+    );
     const present = new Set(indexes);
     const maxIndex = indexes[indexes.length - 1];
     const missing = [];
 
     for (let index = 0; index <= maxIndex; index += 1) {
-      if (!present.has(index)) {
+      if (!present.has(index) || (userIndexes.has(index) && !assistantIndexes.has(index))) {
         missing.push(index);
       }
     }
@@ -176,34 +188,48 @@
     const provider = activeProvider();
     const session = state.currentSession;
 
-    if (!provider || !session || state.autoScrolling === false && false) {
+    if (!provider || !session) {
       return;
     }
 
     const messages = provider.collectVisibleMessages();
-    let changed = false;
+    let structureChanged = false;
+    let contentChanged = false;
     session.visibleMap.clear();
 
     messages.forEach((message) => {
       session.visibleMap.set(message.index, true);
 
-      if (session.messageMap.has(message.key)) {
+      const existing = session.messageMap.get(message.key);
+
+      if (!existing) {
+        session.messageMap.set(message.key, message);
+        session.messages.push(message);
+        structureChanged = true;
         return;
       }
 
-      session.messageMap.set(message.key, message);
-      session.messages.push(message);
-      changed = true;
+      if (existing.content !== message.content) {
+        existing.content = message.content;
+        contentChanged = true;
+      }
     });
 
-    if (changed) {
+    if (structureChanged) {
       session.updatedAt = Date.now();
       session.messages.sort(sortMessages);
       calculateCoverage(session);
       scheduleSave(session);
+      renderPanel();
+    } else if (contentChanged) {
+      session.updatedAt = Date.now();
+      scheduleSave(session);
+      updateJumpStates();
+    } else {
+      updateJumpStates();
     }
 
-    renderPanel();
+    decorateMessageNodes();
   }
 
   function sortMessages(left, right) {
@@ -301,9 +327,25 @@
   function hydrateSession(record) {
     const session = createSession(record.id, record.title);
     session.platform = record.platform || "copilot";
-    session.messages = Array.isArray(record.messages) ? record.messages : [];
-    session.messageMap = new Map(Array.isArray(record.messageMap) ? record.messageMap : []);
-    session.coverage = record.coverage || session.coverage;
+    const records = Array.isArray(record.messages) ? record.messages : [];
+    const messageMap = new Map();
+
+    records.forEach((message) => {
+      const content = String(message.content || "").trim();
+      if (!content || !Number.isFinite(Number(message.index))) {
+        return;
+      }
+
+      const normalized = createMessage(
+        Number(message.index),
+        message.role === "assistant" ? "assistant" : "user",
+        content
+      );
+      messageMap.set(normalized.key, normalized);
+    });
+
+    session.messages = Array.from(messageMap.values()).sort(sortMessages);
+    session.messageMap = messageMap;
     session.createdAt = record.createdAt || session.createdAt;
     session.updatedAt = record.updatedAt || session.updatedAt;
     calculateCoverage(session);
@@ -501,18 +543,54 @@
         border-radius: 6px;
       }
       #${PANEL_ID} .acn-outline-item {
-        display: block;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
         width: 100%;
+        gap: 6px;
         text-align: left;
         border: 0;
         border-bottom: 1px solid #eaeef2;
         border-radius: 0;
-        white-space: nowrap;
-        text-overflow: ellipsis;
         overflow: hidden;
       }
       #${PANEL_ID} .acn-outline-item:last-child {
         border-bottom: 0;
+      }
+      #${PANEL_ID} .acn-outline-no,
+      #${PANEL_ID} .acn-outline-state {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      #${PANEL_ID} .acn-outline-title {
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      #${PANEL_ID} .acn-outline-item[data-status=loaded] .acn-outline-state {
+        color: #1877b2;
+      }
+      #${PANEL_ID} .acn-outline-item[data-status=unloaded] .acn-outline-state {
+        color: #b45309;
+      }
+      #${PANEL_ID} .acn-outline-item[data-status=unloaded] {
+        opacity: .8;
+      }
+      [data-acn-sequence]::before {
+        content: "#" attr(data-acn-sequence);
+        display: inline-block;
+        margin-right: 6px;
+        padding: 1px 5px;
+        border: 1px solid #91caff;
+        border-radius: 4px;
+        background: #e6f4ff;
+        color: #0958d9;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11px;
+        font-weight: 650;
+        line-height: 16px;
+        vertical-align: baseline;
       }
       #${PANEL_ID} .acn-session {
         display: flex;
@@ -594,6 +672,9 @@
     const sessions = Array.from(state.sessions.values())
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, 10);
+    const previousBodyScrollTop = body.scrollTop;
+    const previousOutline = body.querySelector(".acn-outline");
+    const previousOutlineScrollTop = previousOutline ? previousOutline.scrollTop : 0;
 
     body.innerHTML = `
       <div class="acn-section">
@@ -623,8 +704,10 @@
       <div class="acn-section">
         <h3>Outline</h3>
         ${outline.length ? `<div class="acn-outline">${outline.map((item) => `
-          <button class="acn-outline-item" type="button" data-action="goto" data-index="${item.index}">
-            ${String(item.index + 1).padStart(3, "0")} ${escapeHtml(item.title || "(empty)")}
+          <button class="acn-outline-item" type="button" data-action="goto" data-index="${item.index}" data-status="unloaded">
+            <span class="acn-outline-no">#${String(item.index + 1).padStart(3, "0")}</span>
+            <span class="acn-outline-title">${escapeHtml(item.title || "(empty)")}</span>
+            <span class="acn-outline-state">Unloaded</span>
           </button>
         `).join("")}</div>` : `<p class="empty">No user messages yet.</p>`}
       </div>
@@ -640,6 +723,51 @@
         `).join("") : `<p class="empty">No saved sessions.</p>`}
       </div>
     `;
+
+    const nextOutline = body.querySelector(".acn-outline");
+    if (nextOutline) {
+      nextOutline.scrollTop = previousOutlineScrollTop;
+    }
+    body.scrollTop = previousBodyScrollTop;
+    updateJumpStates();
+  }
+
+  function updateJumpStates() {
+    if (!panel) {
+      return;
+    }
+
+    const provider = activeProvider();
+    const mountedIndexes = provider ? provider.getMountedIndexes() : new Set();
+
+    panel.querySelectorAll(".acn-outline-item[data-index]").forEach((button) => {
+      const index = Number(button.dataset.index);
+      const loaded = mountedIndexes.has(index);
+      button.dataset.status = loaded ? "loaded" : "unloaded";
+
+      const state = button.querySelector(".acn-outline-state");
+      if (state) {
+        state.textContent = loaded ? "Ready" : "Unloaded";
+      }
+    });
+  }
+
+  function decorateMessageNodes() {
+    const nodes = document.querySelectorAll(
+      '[data-testid="m365-chat-llm-web-ui-chat-message"]'
+    );
+
+    nodes.forEach((node, nodeIndex) => {
+      const rawIndex = node.getAttribute("data-message-index");
+      const parsedIndex = Number(rawIndex);
+      const index = Number.isFinite(parsedIndex) ? parsedIndex : nodeIndex;
+      const sequence = String(index + 1).padStart(3, "0");
+
+      node.querySelectorAll('[data-testid="chatInput"], [data-testid="chatOutput"], [data-testid="markdown-reply"]')
+        .forEach((contentNode) => {
+          contentNode.dataset.acnSequence = sequence;
+        });
+    });
   }
 
   function findScrollContainers() {
@@ -729,7 +857,9 @@
       return;
     }
 
-    const messages = [...session.messages].sort(sortMessages);
+    const messages = [...session.messages]
+      .filter((message) => message.content && message.content.trim())
+      .sort(sortMessages);
     const markdown = [
       "---",
       `platform: ${session.platform}`,
