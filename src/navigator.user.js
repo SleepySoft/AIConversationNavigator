@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.2.0
+// @version      0.3.0
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -28,7 +28,8 @@
     currentConversationId: null,
     currentSession: null,
     sessions: new Map(),
-    autoScrolling: false
+    autoScrolling: false,
+    previewIndex: null
   };
 
   let panel = null;
@@ -78,10 +79,28 @@
       return messages;
     }
 
-    getMountedIndexes() {
-      return new Set(Array.from(document.querySelectorAll(
+    getVisibleIndexes() {
+      const visibleIndexes = new Set();
+
+      document.querySelectorAll(
         '[data-testid="m365-chat-llm-web-ui-chat-message"][data-message-index]'
-      )).map((node) => Number(node.getAttribute("data-message-index"))));
+      ).forEach((node) => {
+        const rect = node.getBoundingClientRect();
+        const index = Number(node.getAttribute("data-message-index"));
+        if (
+          Number.isFinite(index) &&
+          rect.bottom > 0 &&
+          rect.top < window.innerHeight &&
+          rect.right > 0 &&
+          rect.left < window.innerWidth &&
+          rect.width > 0 &&
+          rect.height > 0
+        ) {
+          visibleIndexes.add(index);
+        }
+      });
+
+      return visibleIndexes;
     }
   }
 
@@ -260,6 +279,7 @@
 
     state.currentConversationId = id;
     state.currentSession = session;
+    closePreview();
     collect();
     renderPanel();
   }
@@ -438,6 +458,21 @@
       }));
   }
 
+  function getCacheState(session, index) {
+    const user = session.messageMap.get(`${index}|user`);
+    const assistant = session.messageMap.get(`${index}|assistant`);
+    const hasUser = Boolean(user && user.content && user.content.trim());
+    const hasAssistant = Boolean(assistant && assistant.content && assistant.content.trim());
+
+    return {
+      user,
+      assistant,
+      hasUser,
+      hasAssistant,
+      complete: hasUser && hasAssistant
+    };
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replaceAll("&", "&amp;")
@@ -457,12 +492,14 @@
     panel.className = "collapsed";
     panel.innerHTML = `
       <div class="acn-panel">
+        <div class="acn-resize-handle" data-resize></div>
         <div class="acn-header">
           <span class="acn-label">Navigator</span>
           <button class="acn-toggle" type="button">Show</button>
         </div>
         <div class="acn-body"></div>
       </div>
+      <div class="acn-preview" hidden></div>
     `;
 
     const style = document.createElement("style");
@@ -477,7 +514,8 @@
       }
       #${PANEL_ID} .acn-panel {
         width: min(360px, calc(100vw - 36px));
-        max-height: min(72vh, 640px);
+        height: min(72vh, 640px);
+        position: relative;
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -488,6 +526,21 @@
       }
       #${PANEL_ID}.collapsed .acn-body {
         display: none;
+      }
+      #${PANEL_ID}.collapsed .acn-panel {
+        height: auto;
+      }
+      #${PANEL_ID} .acn-resize-handle {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 18px;
+        height: 18px;
+        cursor: nwse-resize;
+        touch-action: none;
+        z-index: 2;
+        background: linear-gradient(135deg, #d0d7de 25%, transparent 25%);
+        border-top-left-radius: 10px;
       }
       #${PANEL_ID} .acn-header {
         display: flex;
@@ -516,6 +569,8 @@
         font-weight: 650;
       }
       #${PANEL_ID} .acn-body {
+        flex: 1;
+        min-height: 0;
         overflow: auto;
         padding: 10px;
       }
@@ -544,11 +599,10 @@
       }
       #${PANEL_ID} .acn-outline-item {
         display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto auto;
         align-items: center;
         width: 100%;
         gap: 6px;
-        text-align: left;
         border: 0;
         border-bottom: 1px solid #eaeef2;
         border-radius: 0;
@@ -557,25 +611,72 @@
       #${PANEL_ID} .acn-outline-item:last-child {
         border-bottom: 0;
       }
-      #${PANEL_ID} .acn-outline-no,
-      #${PANEL_ID} .acn-outline-state {
+      #${PANEL_ID} .acn-outline-jump {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        padding: 6px 8px;
+        text-align: left;
+      }
+      #${PANEL_ID} .acn-outline-no {
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
         font-size: 11px;
         white-space: nowrap;
+      }
+      #${PANEL_ID} .acn-outline-states {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 3px;
+        padding-right: 6px;
+      }
+      #${PANEL_ID} .acn-status-chip {
+        border: 1px solid #d0d7de;
+        border-radius: 999px;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 10px;
+        line-height: 14px;
+        padding: 0 5px;
+        white-space: nowrap;
+      }
+      #${PANEL_ID} .acn-outline-item[data-view="in"] .acn-view-chip {
+        border-color: #91caff;
+        background: #e6f4ff;
+        color: #0958d9;
+      }
+      #${PANEL_ID} .acn-outline-item[data-view="out"] .acn-view-chip {
+        border-color: #ffd591;
+        background: #fffbe6;
+        color: #ad6800;
+      }
+      #${PANEL_ID} .acn-outline-item[data-cache="cached"] .acn-cache-chip {
+        border-color: #b7eb8f;
+        background: #f6ffed;
+        color: #389e0d;
+      }
+      #${PANEL_ID} .acn-outline-item[data-cache="partial"] .acn-cache-chip {
+        border-color: #ff9c6e;
+        background: #fff2e8;
+        color: #ad4e00;
+      }
+      #${PANEL_ID} .acn-outline-preview {
+        margin-right: 6px;
+        font-size: 11px;
+        padding: 2px 6px;
+      }
+      #${PANEL_ID} .acn-outline-preview:disabled {
+        cursor: not-allowed;
+        opacity: .55;
       }
       #${PANEL_ID} .acn-outline-title {
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
-      }
-      #${PANEL_ID} .acn-outline-item[data-status=loaded] .acn-outline-state {
-        color: #1877b2;
-      }
-      #${PANEL_ID} .acn-outline-item[data-status=unloaded] .acn-outline-state {
-        color: #b45309;
-      }
-      #${PANEL_ID} .acn-outline-item[data-status=unloaded] {
-        opacity: .8;
       }
       [data-acn-sequence]::before {
         content: "#" attr(data-acn-sequence);
@@ -608,6 +709,62 @@
       #${PANEL_ID} .empty {
         color: #57606a;
       }
+      #${PANEL_ID} .acn-preview {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(9, 30, 66, .45);
+      }
+      #${PANEL_ID} .acn-preview[hidden] {
+        display: none;
+      }
+      #${PANEL_ID}.collapsed .acn-resize-handle {
+        display: none;
+      }
+      #${PANEL_ID} .acn-preview-card {
+        width: min(760px, 94vw);
+        max-height: min(84vh, 900px);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid #d0d7de;
+        border-radius: 10px;
+        background: #fff;
+        box-shadow: 0 20px 60px rgba(9,30,66,.28);
+      }
+      #${PANEL_ID} .acn-preview-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-bottom: 1px solid #d0d7de;
+        background: #f6f8fa;
+      }
+      #${PANEL_ID} .acn-preview-body {
+        overflow: auto;
+        padding: 12px;
+      }
+      #${PANEL_ID} .acn-preview-turn {
+        margin-bottom: 14px;
+      }
+      #${PANEL_ID} .acn-preview-role {
+        margin: 0 0 6px;
+        font-weight: 650;
+      }
+      #${PANEL_ID} .acn-preview-content {
+        margin: 0;
+        padding: 10px;
+        border: 1px solid #eaeef2;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background: #fafbfc;
+      }
     `;
 
     panel.appendChild(style);
@@ -638,6 +795,10 @@
         renderPanel();
       } else if (action === "goto") {
         scrollToMessage(Number(button.dataset.index));
+      } else if (action === "preview") {
+        showPreview(Number(button.dataset.index));
+      } else if (action === "close-preview") {
+        closePreview();
       } else if (action === "select") {
         const session = state.sessions.get(button.dataset.id);
         if (session) {
@@ -648,6 +809,49 @@
       } else if (action === "delete") {
         await deleteSession(button.dataset.id);
         renderPanel();
+      }
+    });
+
+    const resizeHandle = panel.querySelector(".acn-resize-handle");
+    resizeHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const panelCard = panel.querySelector(".acn-panel");
+      const startRect = panelCard.getBoundingClientRect();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const startWidth = startRect.width;
+      const startHeight = startRect.height;
+      const minWidth = 300;
+      const minHeight = 200;
+      const maxWidth = Math.max(minWidth, window.innerWidth - 36);
+      const maxHeight = Math.max(minHeight, window.innerHeight - 36);
+
+      const onPointerMove = (moveEvent) => {
+        panelCard.style.width = `${Math.min(maxWidth, Math.max(minWidth, startWidth + startX - moveEvent.clientX))}px`;
+        panelCard.style.height = `${Math.min(maxHeight, Math.max(minHeight, startHeight + startY - moveEvent.clientY))}px`;
+      };
+
+      const stopResize = () => {
+        resizeHandle.removeEventListener("pointermove", onPointerMove);
+        resizeHandle.removeEventListener("pointerup", stopResize);
+        resizeHandle.removeEventListener("pointercancel", stopResize);
+      };
+
+      resizeHandle.setPointerCapture(event.pointerId);
+      resizeHandle.addEventListener("pointermove", onPointerMove);
+      resizeHandle.addEventListener("pointerup", stopResize);
+      resizeHandle.addEventListener("pointercancel", stopResize);
+    });
+
+    panel.querySelector(".acn-preview").addEventListener("click", (event) => {
+      if (event.target === panel.querySelector(".acn-preview")) {
+        closePreview();
+      }
+    });
+
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closePreview();
       }
     });
   }
@@ -704,11 +908,19 @@
       <div class="acn-section">
         <h3>Outline</h3>
         ${outline.length ? `<div class="acn-outline">${outline.map((item) => `
-          <button class="acn-outline-item" type="button" data-action="goto" data-index="${item.index}" data-status="unloaded">
-            <span class="acn-outline-no">#${String(item.index + 1).padStart(3, "0")}</span>
-            <span class="acn-outline-title">${escapeHtml(item.title || "(empty)")}</span>
-            <span class="acn-outline-state">Unloaded</span>
-          </button>
+          <div class="acn-outline-item" data-index="${item.index}" data-view="out" data-cache="partial">
+            <button class="acn-outline-jump" type="button" data-action="goto" data-index="${item.index}">
+              <span class="acn-outline-no">#${String(item.index + 1).padStart(3, "0")}</span>
+              <span class="acn-outline-title">${escapeHtml(item.title || "(empty)")}</span>
+            </button>
+            <span class="acn-outline-states">
+              <span class="acn-status-chip acn-view-chip">Off view</span>
+              <span class="acn-status-chip acn-cache-chip">Partial</span>
+            </span>
+            <button class="acn-outline-preview" type="button" data-action="preview" data-index="${item.index}" disabled>
+              Preview
+            </button>
+          </div>
         `).join("")}</div>` : `<p class="empty">No user messages yet.</p>`}
       </div>
       <div class="acn-section">
@@ -738,18 +950,85 @@
     }
 
     const provider = activeProvider();
-    const mountedIndexes = provider ? provider.getMountedIndexes() : new Set();
+    const session = state.currentSession;
+    if (!provider || !session) {
+      return;
+    }
 
-    panel.querySelectorAll(".acn-outline-item[data-index]").forEach((button) => {
-      const index = Number(button.dataset.index);
-      const loaded = mountedIndexes.has(index);
-      button.dataset.status = loaded ? "loaded" : "unloaded";
+    const visibleIndexes = provider.getVisibleIndexes();
 
-      const state = button.querySelector(".acn-outline-state");
-      if (state) {
-        state.textContent = loaded ? "Ready" : "Unloaded";
+    panel.querySelectorAll(".acn-outline-item[data-index]").forEach((item) => {
+      const index = Number(item.dataset.index);
+      const cache = getCacheState(session, index);
+      const inView = visibleIndexes.has(index);
+
+      item.dataset.view = inView ? "in" : "out";
+      item.dataset.cache = cache.complete ? "cached" : "partial";
+
+      const viewChip = item.querySelector(".acn-view-chip");
+      const cacheChip = item.querySelector(".acn-cache-chip");
+      const previewButton = item.querySelector(".acn-outline-preview");
+
+      if (viewChip) {
+        viewChip.textContent = inView ? "In view" : "Off view";
+      }
+      if (cacheChip) {
+        cacheChip.textContent = cache.complete ? "Cached" : "Partial";
+      }
+      if (previewButton) {
+        previewButton.disabled = !cache.complete;
       }
     });
+  }
+
+  function showPreview(index) {
+    const session = state.currentSession;
+    if (!panel || !session) {
+      return;
+    }
+
+    const cache = getCacheState(session, index);
+    if (!cache.complete) {
+      return;
+    }
+
+    const sequence = String(index + 1).padStart(3, "0");
+    const preview = panel.querySelector(".acn-preview");
+    state.previewIndex = index;
+    preview.innerHTML = `
+      <div class="acn-preview-card" role="dialog" aria-modal="true">
+        <div class="acn-preview-header">
+          <div>
+            <strong>#${sequence} Cached preview</strong>
+            <div class="acn-title">${escapeHtml(session.title)}</div>
+          </div>
+          <button type="button" data-action="close-preview">Close</button>
+        </div>
+        <div class="acn-preview-body">
+          <div class="acn-preview-turn">
+            <p class="acn-preview-role">#${sequence} User</p>
+            <pre class="acn-preview-content">${escapeHtml(cache.user.content)}</pre>
+          </div>
+          <div class="acn-preview-turn">
+            <p class="acn-preview-role">#${sequence} Assistant</p>
+            <pre class="acn-preview-content">${escapeHtml(cache.assistant.content)}</pre>
+          </div>
+        </div>
+      </div>
+    `;
+    preview.hidden = false;
+    preview.querySelector("button[data-action=\"close-preview\"]").focus();
+  }
+
+  function closePreview() {
+    if (!panel) {
+      return;
+    }
+
+    const preview = panel.querySelector(".acn-preview");
+    preview.hidden = true;
+    preview.innerHTML = "";
+    state.previewIndex = null;
   }
 
   function decorateMessageNodes() {
