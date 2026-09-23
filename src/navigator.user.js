@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.3.0
+// @version      0.3.1
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -48,59 +48,159 @@
       return document.title.trim() || "Untitled conversation";
     }
 
-    collectVisibleMessages() {
-      const nodes = document.querySelectorAll(
+    getMessageNodes() {
+      return Array.from(document.querySelectorAll(
         '[data-testid="m365-chat-llm-web-ui-chat-message"]'
+      ));
+    }
+
+    getOutermostMatches(node, selector) {
+      const matches = Array.from(node.querySelectorAll(selector));
+      return matches.filter((match) =>
+        !matches.some((other) => other !== match && other.contains(match))
       );
+    }
+
+    getStableNodeKey(node) {
+      return node.getAttribute("data-message-id") ||
+        node.getAttribute("data-activity-id") ||
+        node.getAttribute("data-conversation-message-id") ||
+        "";
+    }
+
+    assignMessageIndexes(session) {
+      const nodes = this.getMessageNodes();
+      if (!session) {
+        return nodes;
+      }
+
+      const usersByContent = new Map(
+        session.messages
+          .filter((message) => message.role === "user")
+          .map((message) => [message.content, message.index])
+      );
+      const stableKeys = session.stableNodeKeys instanceof Map
+        ? session.stableNodeKeys
+        : new Map();
+      const assigned = new Set();
+      let nextIndex = session.messages.reduce(
+        (max, message) => Math.max(max, message.index + 1),
+        0
+      );
+
+      nodes.forEach((node) => {
+        const rawIndex = node.getAttribute("data-message-index");
+        const parsedIndex = rawIndex === null || rawIndex === "" ? NaN : Number(rawIndex);
+        const stableKey = this.getStableNodeKey(node);
+        let index = null;
+
+        if (Number.isInteger(parsedIndex) && parsedIndex >= 0) {
+          index = parsedIndex;
+        } else if (stableKey && stableKeys.has(stableKey)) {
+          index = stableKeys.get(stableKey);
+        }
+
+        if (index === null) {
+          const { userNodes } = this.getContentTargets(node);
+          const userContent = userNodes.map((userNode) => userNode.innerText.trim()).join("\n\n");
+          if (userContent && usersByContent.has(userContent)) {
+            index = usersByContent.get(userContent);
+          }
+        }
+
+        if (index === null || assigned.has(index)) {
+          index = nextIndex;
+          nextIndex += 1;
+        }
+
+        assigned.add(index);
+        if (stableKey) {
+          stableKeys.set(stableKey, index);
+        }
+        node.dataset.acnIndex = String(index);
+      });
+
+      session.stableNodeKeys = stableKeys;
+      return nodes;
+    }
+
+    getContentTargets(node) {
+      const assistantNodes = this.getOutermostMatches(
+        node,
+        '[data-testid="markdown-reply"]'
+      );
+      const userNodes = this.getOutermostMatches(
+        node,
+        '[data-testid="chatInput"], [data-testid="chatOutput"]'
+      ).filter((userNode) => !assistantNodes.some((assistantNode) =>
+        userNode.contains(assistantNode) || assistantNode.contains(userNode)
+      ));
+
+      return { userNodes, assistantNodes };
+    }
+
+    collectVisibleMessages() {
+      const nodes = this.assignMessageIndexes(state.currentSession);
       const messages = [];
 
       nodes.forEach((node, nodeIndex) => {
-        const rawIndex = node.getAttribute("data-message-index");
-        const parsedIndex = Number(rawIndex);
-        const index = Number.isFinite(parsedIndex) ? parsedIndex : nodeIndex;
-        const user = node.querySelector('[data-testid="chatInput"], [data-testid="chatOutput"]');
-        const assistant = node.querySelector('[data-testid="markdown-reply"]');
+        const index = Number(node.dataset.acnIndex);
+        const { userNodes, assistantNodes } = this.getContentTargets(node);
 
-        if (user) {
-          const content = user.innerText.trim();
-          if (content) {
-            messages.push(createMessage(index, "user", content));
-          }
+        const userContent = userNodes
+          .map((userNode) => userNode.innerText.trim())
+          .filter(Boolean)
+          .join("\n\n");
+        const assistantContent = assistantNodes
+          .map((assistantNode) => assistantNode.innerText.trim())
+          .filter(Boolean)
+          .join("\n\n");
+
+        if (userContent) {
+          messages.push(createMessage(index, "user", userContent));
         }
 
-        if (assistant) {
-          const content = assistant.innerText.trim();
-          if (content) {
-            messages.push(createMessage(index, "assistant", content));
-          }
+        if (assistantContent) {
+          messages.push(createMessage(index, "assistant", assistantContent));
         }
+
+        node.dataset.acnIndex = String(index);
       });
 
       return messages;
     }
 
-    getVisibleIndexes() {
-      const visibleIndexes = new Set();
+    getLoadedIndexes() {
+      const loadedIndexes = new Set();
 
-      document.querySelectorAll(
-        '[data-testid="m365-chat-llm-web-ui-chat-message"][data-message-index]'
-      ).forEach((node) => {
+      this.assignMessageIndexes(state.currentSession).forEach((node) => {
+        loadedIndexes.add(Number(node.dataset.acnIndex));
+      });
+
+      return loadedIndexes;
+    }
+
+    getCurrentIndex() {
+      let currentIndex = null;
+      let largestVisibleArea = 0;
+
+      this.assignMessageIndexes(state.currentSession).forEach((node) => {
+        const index = Number(node.dataset.acnIndex);
         const rect = node.getBoundingClientRect();
-        const index = Number(node.getAttribute("data-message-index"));
-        if (
-          Number.isFinite(index) &&
-          rect.bottom > 0 &&
-          rect.top < window.innerHeight &&
-          rect.right > 0 &&
-          rect.left < window.innerWidth &&
-          rect.width > 0 &&
-          rect.height > 0
-        ) {
-          visibleIndexes.add(index);
+
+        if (rect.width > 0 && rect.height > 0) {
+          const visibleWidth = Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0);
+          const visibleHeight = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+          const visibleArea = Math.max(0, visibleWidth) * Math.max(0, visibleHeight);
+
+          if (visibleArea > largestVisibleArea) {
+            largestVisibleArea = visibleArea;
+            currentIndex = index;
+          }
         }
       });
 
-      return visibleIndexes;
+      return currentIndex;
     }
   }
 
@@ -118,6 +218,7 @@
       messages: [],
       messageMap: new Map(),
       visibleMap: new Map(),
+      stableNodeKeys: new Map(),
       coverage: {
         maxIndex: -1,
         missingRanges: [],
@@ -229,8 +330,10 @@
       }
 
       if (existing.content !== message.content) {
-        existing.content = message.content;
-        contentChanged = true;
+        if (message.role !== "assistant" || message.content.length >= existing.content.length) {
+          existing.content = message.content;
+          contentChanged = true;
+        }
       }
     });
 
@@ -337,8 +440,10 @@
   }
 
   function serializeSession(session) {
+    const { stableNodeKeys, ...record } = session;
+
     return {
-      ...session,
+      ...record,
       messageMap: Array.from(session.messageMap.entries()),
       visibleMap: []
     };
@@ -599,7 +704,7 @@
       }
       #${PANEL_ID} .acn-outline-item {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-columns: minmax(0, 1fr) 22px 22px 32px;
         align-items: center;
         width: 100%;
         gap: 6px;
@@ -628,31 +733,27 @@
         font-size: 11px;
         white-space: nowrap;
       }
-      #${PANEL_ID} .acn-outline-states {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 3px;
-        padding-right: 6px;
-      }
       #${PANEL_ID} .acn-status-chip {
         border: 1px solid #d0d7de;
         border-radius: 999px;
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
         font-size: 10px;
-        line-height: 14px;
-        padding: 0 5px;
+        width: 22px;
+        height: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         white-space: nowrap;
       }
-      #${PANEL_ID} .acn-outline-item[data-view="in"] .acn-view-chip {
+      #${PANEL_ID} .acn-outline-item[data-loaded="yes"] .acn-view-chip {
         border-color: #91caff;
         background: #e6f4ff;
         color: #0958d9;
       }
-      #${PANEL_ID} .acn-outline-item[data-view="out"] .acn-view-chip {
-        border-color: #ffd591;
-        background: #fffbe6;
-        color: #ad6800;
+      #${PANEL_ID} .acn-outline-item[data-loaded="no"] .acn-view-chip {
+        border-color: #d0d7de;
+        background: #f6f8fa;
+        color: #57606a;
       }
       #${PANEL_ID} .acn-outline-item[data-cache="cached"] .acn-cache-chip {
         border-color: #b7eb8f;
@@ -663,6 +764,12 @@
         border-color: #ff9c6e;
         background: #fff2e8;
         color: #ad4e00;
+      }
+      #${PANEL_ID} .acn-outline-item[data-current="true"] {
+        background: #ddf4ff;
+      }
+      #${PANEL_ID} .acn-outline-item[data-current="true"] .acn-outline-jump {
+        background: transparent;
       }
       #${PANEL_ID} .acn-outline-preview {
         margin-right: 6px;
@@ -908,17 +1015,15 @@
       <div class="acn-section">
         <h3>Outline</h3>
         ${outline.length ? `<div class="acn-outline">${outline.map((item) => `
-          <div class="acn-outline-item" data-index="${item.index}" data-view="out" data-cache="partial">
+          <div class="acn-outline-item" data-index="${item.index}" data-loaded="no" data-cache="partial" data-current="false">
             <button class="acn-outline-jump" type="button" data-action="goto" data-index="${item.index}">
               <span class="acn-outline-no">#${String(item.index + 1).padStart(3, "0")}</span>
               <span class="acn-outline-title">${escapeHtml(item.title || "(empty)")}</span>
             </button>
-            <span class="acn-outline-states">
-              <span class="acn-status-chip acn-view-chip">Off view</span>
-              <span class="acn-status-chip acn-cache-chip">Partial</span>
-            </span>
-            <button class="acn-outline-preview" type="button" data-action="preview" data-index="${item.index}" disabled>
-              Preview
+            <span class="acn-status-chip acn-view-chip" title="Loaded and jumpable">–</span>
+            <span class="acn-status-chip acn-cache-chip" title="User and Assistant cached">◐</span>
+            <button class="acn-outline-preview" type="button" data-action="preview" data-index="${item.index}" disabled title="Preview cached turn" aria-label="Preview cached turn">
+              👁
             </button>
           </div>
         `).join("")}</div>` : `<p class="empty">No user messages yet.</p>`}
@@ -955,25 +1060,30 @@
       return;
     }
 
-    const visibleIndexes = provider.getVisibleIndexes();
+    const loadedIndexes = provider.getLoadedIndexes();
+    const currentIndex = provider.getCurrentIndex();
 
     panel.querySelectorAll(".acn-outline-item[data-index]").forEach((item) => {
       const index = Number(item.dataset.index);
       const cache = getCacheState(session, index);
-      const inView = visibleIndexes.has(index);
+      const loaded = loadedIndexes.has(index);
 
-      item.dataset.view = inView ? "in" : "out";
+      item.dataset.loaded = loaded ? "yes" : "no";
       item.dataset.cache = cache.complete ? "cached" : "partial";
+      item.dataset.current = index === currentIndex ? "true" : "false";
+      item.setAttribute("aria-current", index === currentIndex ? "true" : "false");
 
       const viewChip = item.querySelector(".acn-view-chip");
       const cacheChip = item.querySelector(".acn-cache-chip");
       const previewButton = item.querySelector(".acn-outline-preview");
 
       if (viewChip) {
-        viewChip.textContent = inView ? "In view" : "Off view";
+        viewChip.textContent = loaded ? "↗" : "–";
+        viewChip.title = loaded ? "Loaded and jumpable" : "Not loaded";
       }
       if (cacheChip) {
-        cacheChip.textContent = cache.complete ? "Cached" : "Partial";
+        cacheChip.textContent = cache.complete ? "✓" : "◐";
+        cacheChip.title = cache.complete ? "User and Assistant cached" : "Assistant not fully cached";
       }
       if (previewButton) {
         previewButton.disabled = !cache.complete;
@@ -1032,20 +1142,30 @@
   }
 
   function decorateMessageNodes() {
-    const nodes = document.querySelectorAll(
-      '[data-testid="m365-chat-llm-web-ui-chat-message"]'
-    );
+    const provider = activeProvider();
+    if (!provider) {
+      return;
+    }
 
-    nodes.forEach((node, nodeIndex) => {
-      const rawIndex = node.getAttribute("data-message-index");
-      const parsedIndex = Number(rawIndex);
-      const index = Number.isFinite(parsedIndex) ? parsedIndex : nodeIndex;
+    const nodes = provider.assignMessageIndexes(state.currentSession);
+
+    nodes.forEach((node) => {
+      const index = Number(node.dataset.acnIndex);
       const sequence = String(index + 1).padStart(3, "0");
+      const { userNodes, assistantNodes } = provider.getContentTargets(node);
 
-      node.querySelectorAll('[data-testid="chatInput"], [data-testid="chatOutput"], [data-testid="markdown-reply"]')
-        .forEach((contentNode) => {
-          contentNode.dataset.acnSequence = sequence;
-        });
+      node.querySelectorAll("[data-acn-sequence]").forEach((contentNode) => {
+        delete contentNode.dataset.acnSequence;
+      });
+
+      node.dataset.acnIndex = String(index);
+
+      userNodes.forEach((contentNode) => {
+        contentNode.dataset.acnSequence = sequence;
+      });
+      assistantNodes.forEach((contentNode) => {
+        contentNode.dataset.acnSequence = sequence;
+      });
     });
   }
 
@@ -1116,7 +1236,7 @@
 
   function scrollToMessage(index) {
     const node = document.querySelector(
-      `[data-testid="m365-chat-llm-web-ui-chat-message"][data-message-index="${index}"]`
+      `[data-testid="m365-chat-llm-web-ui-chat-message"][data-acn-index="${index}"]`
     );
 
     if (!node) {
