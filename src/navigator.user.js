@@ -653,11 +653,14 @@
       #${PANEL_ID} .acn-body {
         flex: 1;
         min-height: 0;
+        display: flex;
+        flex-direction: column;
         overflow: auto;
-        padding: 10px;
+        padding: 10px 10px 0;
       }
       #${PANEL_ID} .acn-section {
         margin-bottom: 14px;
+        flex-shrink: 0;
       }
       #${PANEL_ID} h3 {
         margin: 0 0 6px;
@@ -673,8 +676,16 @@
       #${PANEL_ID} p {
         margin: 0 0 8px;
       }
+      #${PANEL_ID} .acn-outline-section {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        margin-bottom: 0;
+      }
       #${PANEL_ID} .acn-outline {
-        max-height: 220px;
+        flex: 1;
+        min-height: 0;
         overflow: auto;
         border: 1px solid #eaeef2;
         border-radius: 6px;
@@ -704,6 +715,10 @@
         background: transparent;
         padding: 6px 8px;
         text-align: left;
+      }
+      #${PANEL_ID} .acn-outline-jump[aria-disabled="true"] {
+        cursor: not-allowed;
+        opacity: .55;
       }
       #${PANEL_ID} .acn-outline-no {
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -865,6 +880,10 @@
         await saveSession(state.currentSession);
         renderPanel();
       } else if (action === "goto") {
+        const outlineItem = button.closest(".acn-outline-item");
+        if (outlineItem && outlineItem.dataset.loaded !== "yes") {
+          return;
+        }
         scrollToMessage(Number(button.dataset.index));
       } else if (action === "preview") {
         showPreview(Number(button.dataset.index));
@@ -963,7 +982,7 @@
           <button type="button" data-action="save">Save now</button>
         </div>
       </div>
-      <div class="acn-section">
+      <div class="acn-section acn-outline-section">
         <h3>Outline</h3>
         ${outline.length ? `<div class="acn-outline">${outline.map((item) => `
           <div class="acn-outline-item" data-index="${item.index}" data-loaded="no" data-cache="partial" data-current="false">
@@ -1017,6 +1036,12 @@
       const viewChip = item.querySelector(".acn-view-chip");
       const cacheChip = item.querySelector(".acn-cache-chip");
       const previewButton = item.querySelector(".acn-outline-preview");
+      const outlineJump = item.querySelector(".acn-outline-jump");
+
+      if (outlineJump) {
+        outlineJump.setAttribute("aria-disabled", loaded ? "false" : "true");
+        outlineJump.title = loaded ? "Click to jump" : "Not loaded in DOM; cannot jump";
+      }
 
       if (viewChip) {
         viewChip.textContent = loaded ? "↗" : "–";
@@ -1188,7 +1213,6 @@
     );
 
     if (!node) {
-      console.warn("[AI Conversation Navigator] message not mounted", index);
       return;
     }
 
