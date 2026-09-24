@@ -505,32 +505,6 @@
     });
   }
 
-  async function deleteSession(id) {
-    state.sessions.delete(id);
-
-    if (state.currentConversationId === id) {
-      state.currentConversationId = null;
-      state.currentSession = null;
-    }
-
-    const database = await openDatabase();
-
-    return new Promise((resolve, reject) => {
-      const transaction = database.transaction(SESSION_STORE, "readwrite");
-      transaction.objectStore(SESSION_STORE).delete(id);
-
-      transaction.oncomplete = () => {
-        database.close();
-        resolve();
-      };
-
-      transaction.onerror = () => {
-        database.close();
-        reject(transaction.error);
-      };
-    });
-  }
-
   async function loadSessions() {
     const database = await openDatabase();
 
@@ -803,19 +777,6 @@
         line-height: 16px;
         vertical-align: baseline;
       }
-      #${PANEL_ID} .acn-session {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        margin-bottom: 5px;
-      }
-      #${PANEL_ID} .acn-session-title {
-        flex: 1;
-        text-align: left;
-        overflow: hidden;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-      }
       #${PANEL_ID} .empty {
         color: #57606a;
       }
@@ -909,16 +870,6 @@
         showPreview(Number(button.dataset.index));
       } else if (action === "close-preview") {
         closePreview();
-      } else if (action === "select") {
-        const session = state.sessions.get(button.dataset.id);
-        if (session) {
-          state.currentConversationId = session.id;
-          state.currentSession = session;
-          renderPanel();
-        }
-      } else if (action === "delete") {
-        await deleteSession(button.dataset.id);
-        renderPanel();
       }
     });
 
@@ -983,9 +934,6 @@
     const missing = session.coverage.missingRanges
       .slice(0, 5)
       .map((range) => range[0] === range[1] ? `${range[0]}` : `${range[0]}-${range[1]}`);
-    const sessions = Array.from(state.sessions.values())
-      .sort((left, right) => right.updatedAt - left.updatedAt)
-      .slice(0, 10);
     const previousBodyScrollTop = body.scrollTop;
     const previousOutline = body.querySelector(".acn-outline");
     const previousOutlineScrollTop = previousOutline ? previousOutline.scrollTop : 0;
@@ -1030,17 +978,6 @@
             </button>
           </div>
         `).join("")}</div>` : `<p class="empty">No user messages yet.</p>`}
-      </div>
-      <div class="acn-section">
-        <h3>Recent sessions</h3>
-        ${sessions.length ? sessions.map((item) => `
-          <div class="acn-session">
-            <button class="acn-session-title" type="button" data-action="select" data-id="${escapeHtml(item.id)}">
-              ${escapeHtml(item.title)}
-            </button>
-            <button type="button" data-action="delete" data-id="${escapeHtml(item.id)}">✕</button>
-          </div>
-        `).join("") : `<p class="empty">No saved sessions.</p>`}
       </div>
     `;
 
