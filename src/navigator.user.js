@@ -620,6 +620,8 @@
       #${PANEL_ID} .acn-panel {
         width: min(360px, calc(100vw - 36px));
         height: min(72vh, 640px);
+        max-width: calc(100vw - 36px);
+        max-height: calc(100vh - 36px);
         position: relative;
         display: flex;
         flex-direction: column;
@@ -633,7 +635,8 @@
         display: none;
       }
       #${PANEL_ID}.collapsed .acn-panel {
-        height: auto;
+        width: auto !important;
+        height: auto !important;
       }
       #${PANEL_ID} .acn-resize-handle {
         position: absolute;
@@ -1072,6 +1075,7 @@
       item.dataset.cache = cache.complete ? "cached" : "partial";
       item.dataset.current = index === currentIndex ? "true" : "false";
       item.setAttribute("aria-current", index === currentIndex ? "true" : "false");
+      item.title = loaded ? "Click to jump" : "Not loaded in DOM; cannot jump";
 
       const viewChip = item.querySelector(".acn-view-chip");
       const cacheChip = item.querySelector(".acn-cache-chip");
@@ -1079,7 +1083,8 @@
 
       if (viewChip) {
         viewChip.textContent = loaded ? "↗" : "–";
-        viewChip.title = loaded ? "Loaded and jumpable" : "Not loaded";
+        viewChip.title = loaded ? "Loaded in DOM" : "Not loaded in DOM";
+        viewChip.setAttribute("aria-label", viewChip.title);
       }
       if (cacheChip) {
         cacheChip.textContent = cache.complete ? "✓" : "◐";
@@ -1160,10 +1165,16 @@
 
       node.dataset.acnIndex = String(index);
 
-      userNodes.forEach((contentNode) => {
+      userNodes.forEach((contentNode, contentNodeIndex) => {
+        if (contentNodeIndex > 0) {
+          return;
+        }
         contentNode.dataset.acnSequence = sequence;
       });
-      assistantNodes.forEach((contentNode) => {
+      assistantNodes.forEach((contentNode, contentNodeIndex) => {
+        if (contentNodeIndex > 0) {
+          return;
+        }
         contentNode.dataset.acnSequence = sequence;
       });
     });
