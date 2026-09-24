@@ -1,38 +1,27 @@
 # AI Conversation Navigator
 
-V0.3.1 可运行实现，用于采集 Microsoft 365 Copilot 会话、生成用户消息 Outline、统计 Coverage、持久化会话并导出 Markdown。
+## 起因
+
+公司指定的AI工具是Copilot。和微软的其它产品一样，它的网页非常重，并且还使用了动态加载内容到DOM的方式，再加上GPT的回复本来就又长啰嗦，导致在Copilot网页上翻找对话体验非常差。
+
+网上有不少GPT网页对话增强工具，但针对Copilot的工具我没找到。好在有AI，而且写个满足我需求的插件又不难，于是我自己弄了一个。
+
+这是个Chrome插件，大家完全可以让AI改造成Edge等chome内核浏览器可用的插件，并定制自己的功能。本插件实现的功能和解决的痛点如下：
+
 
 ## 功能
 
-- Copilot 会话切换检测
-- DOM / 滚动增量采集与去重
-- Coverage 与缺失范围统计
-- 用户消息 Outline
-- Outline 项分列显示已加载可跳转（↗/–）和缓存完成（✓/◐）状态，当前查看项高亮
-- 已完整缓存的会话轮次可直接打开 Preview 弹窗
-- Navigator 面板可通过左上角手柄向上、向左拖大
-- 对话正文前显示 #001 格式序号
-- 未加载的空 Assistant 内容不会被记录或导出
-- IndexedDB 持久化
-- Markdown 导出
-- 自动滚动补全模式
-- 浮动 Navigator 面板
+- 缓存每一个加载过的会话，可以导出成markdown格式的文件 ---- 解决导出对话内容困难的问题。
+- 将每轮对话组织成列表，对于在当前DOM中的，点击可直接跳转 ---- 解决翻找圣诞困难的问题。
+- 对于已加载过的对话内容，可以直接点击列表的预览按钮查看 ---- 解决翻找时等待加内容加载的问题。
+- 对每轮会话增加index显示 ---- 和列表内容对照，让用户明确知道自己浏览的是第几轮对话。
 
-## 以 Chrome 扩展调试
+## 使用
 
-1. 打开 chrome://extensions/
-2. 开启 Developer mode
-3. 点击 Load unpacked
-4. 选择本仓库根目录
-5. 打开 https://m365.cloud.microsoft/chat
-6. 使用页面右下角的 Navigator 面板
-
-## 以油猴脚本调试
-
-1. 安装 Tampermonkey / Violentmonkey
-2. 新建脚本并导入 src/navigator.user.js
-3. 保存后刷新 Copilot 页面
-
-## 控制台调试
-
-脚本暴露 window.__AI_CONVERSATION_NAVIGATOR__，可以访问 state.currentSession，或调用 collect、toggleAutoScroll、exportMarkdown。
+1. clone本项目，或下载本项目的压缩包并解压：[https://github.com/SleepySoft/AIConversationNavigator](https://github.com/SleepySoft/AIConversationNavigator)
+2. 打开 [chrome://extensions/](chrome://extensions/)
+3. 开启 Developer mode
+4. 点击 Load unpacked
+5. 选择本仓库根目录
+6. 打开 https://m365.cloud.microsoft/chat
+7. 展开页面右下角的 Navigator 面板
