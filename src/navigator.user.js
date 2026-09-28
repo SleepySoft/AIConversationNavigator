@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.3.1
+// @version      0.3.2
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -1119,7 +1119,7 @@
     nodes.forEach((node) => {
       const index = Number(node.dataset.acnIndex);
       const sequence = String(index + 1).padStart(3, "0");
-      const { userNodes, assistantNodes } = provider.getContentTargets(node);
+      const { userNodes } = provider.getContentTargets(node);
 
       node.querySelectorAll("[data-acn-sequence]").forEach((contentNode) => {
         delete contentNode.dataset.acnSequence;
@@ -1128,12 +1128,6 @@
       node.dataset.acnIndex = String(index);
 
       userNodes.forEach((contentNode, contentNodeIndex) => {
-        if (contentNodeIndex > 0) {
-          return;
-        }
-        contentNode.dataset.acnSequence = sequence;
-      });
-      assistantNodes.forEach((contentNode, contentNodeIndex) => {
         if (contentNodeIndex > 0) {
           return;
         }
