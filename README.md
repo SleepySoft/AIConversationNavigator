@@ -1,5 +1,7 @@
 # AI Conversation Navigator
 
+![ui-01](docs\ui-01.png)
+
 ## 起因
 
 公司指定的AI工具是Copilot。和微软的其它产品一样，它的网页非常重，并且还使用了动态加载内容到DOM的方式，再加上GPT的回复本来就又长啰嗦，导致在Copilot网页上翻找对话体验非常差。
