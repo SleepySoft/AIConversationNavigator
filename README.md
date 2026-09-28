@@ -1,6 +1,6 @@
 # AI Conversation Navigator
 
-![ui-01](docs\ui-01.png)
+![ui-01](docs/ui-01.png)
 
 ## 起因
 
