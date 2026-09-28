@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.3.2
+// @version      0.3.3
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -876,9 +876,6 @@
         exportMarkdown();
       } else if (action === "autoscroll") {
         await toggleAutoScroll();
-      } else if (action === "save" && state.currentSession) {
-        await saveSession(state.currentSession);
-        renderPanel();
       } else if (action === "goto") {
         const outlineItem = button.closest(".acn-outline-item");
         if (outlineItem && outlineItem.dataset.loaded !== "yes") {
@@ -979,7 +976,6 @@
         <div class="acn-actions">
           <button type="button" data-action="export">Export MD</button>
           <button type="button" data-action="autoscroll">${state.autoScrolling ? "Stop scroll" : "Auto scroll"}</button>
-          <button type="button" data-action="save">Save now</button>
         </div>
       </div>
       <div class="acn-section acn-outline-section">
