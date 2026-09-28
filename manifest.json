@@ -1,20 +1,26 @@
 {
   "manifest_version": 3,
   "name": "AI Conversation Navigator",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Collect, outline, persist, and export AI conversations with coverage tracking.",
   "permissions": [],
   "host_permissions": [
     "https://m365.cloud.microsoft/*"
   ],
+  "web_accessible_resources": [{
+    "resources": ["dist/fonts/*"],
+    "matches": ["https://m365.cloud.microsoft/*"]
+  }],
   "content_scripts": [
     {
       "matches": [
         "https://m365.cloud.microsoft/*"
       ],
       "js": [
+        "dist/preview-renderer.js",
         "src/navigator.user.js"
       ],
+      "css": ["dist/katex.css"],
       "run_at": "document_idle",
       "world": "MAIN"
     }

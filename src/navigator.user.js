@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.3.3
+// @version      0.4.0
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -151,8 +151,11 @@
           .map((userNode) => userNode.innerText.trim())
           .filter(Boolean)
           .join("\n\n");
+        const renderer = window.__ACN_PREVIEW_RENDERER__;
         const assistantContent = assistantNodes
-          .map((assistantNode) => assistantNode.innerText.trim())
+          .map((assistantNode) => renderer
+            ? renderer.toMarkdown(assistantNode)
+            : assistantNode.innerText.trim())
           .filter(Boolean)
           .join("\n\n");
 
@@ -161,7 +164,8 @@
         }
 
         if (assistantContent) {
-          messages.push(createMessage(index, "assistant", assistantContent));
+          messages.push(createMessage(index, "assistant", assistantContent,
+            renderer ? "markdown" : "text"));
         }
 
         node.dataset.acnIndex = String(index);
@@ -229,11 +233,12 @@
     };
   }
 
-  function createMessage(index, role, content) {
+  function createMessage(index, role, content, format = "text") {
     return {
       index,
       role,
       content,
+      format,
       key: `${index}|${role}`
     };
   }
@@ -329,9 +334,12 @@
         return;
       }
 
-      if (existing.content !== message.content) {
-        if (message.role !== "assistant" || message.content.length >= existing.content.length) {
+      if (existing.content !== message.content || existing.format !== message.format) {
+        if (message.role !== "assistant" ||
+          (message.format === "markdown" && existing.format !== "markdown") ||
+          message.content.length >= existing.content.length) {
           existing.content = message.content;
+          existing.format = message.format;
           contentChanged = true;
         }
       }
@@ -464,7 +472,8 @@
       const normalized = createMessage(
         Number(message.index),
         message.role === "assistant" ? "assistant" : "user",
-        content
+        content,
+        message.format === "markdown" ? "markdown" : "text"
       );
       messageMap.set(normalized.key, normalized);
     });
@@ -812,8 +821,8 @@
         display: none;
       }
       #${PANEL_ID} .acn-preview-card {
-        width: min(760px, 94vw);
-        max-height: min(84vh, 900px);
+        width: min(860px, 94vw);
+        max-height: min(88vh, 960px);
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -833,23 +842,110 @@
       }
       #${PANEL_ID} .acn-preview-body {
         overflow: auto;
-        padding: 12px;
+        padding: 18px 22px;
+        background: #f8fafc;
       }
       #${PANEL_ID} .acn-preview-turn {
-        margin-bottom: 14px;
+        margin-bottom: 16px;
+        padding: 18px 20px;
+        border: 1px solid #e1e7ef;
+        border-radius: 9px;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(9, 30, 66, .05);
+      }
+      #${PANEL_ID} .acn-preview-turn:last-child {
+        margin-bottom: 0;
       }
       #${PANEL_ID} .acn-preview-role {
-        margin: 0 0 6px;
+        margin: 0 0 14px;
+        padding-bottom: 9px;
+        border-bottom: 1px solid #eaeef2;
+        color: #475569;
+        font-size: 12px;
         font-weight: 650;
       }
       #${PANEL_ID} .acn-preview-content {
-        margin: 0;
-        padding: 10px;
-        border: 1px solid #eaeef2;
-        border-radius: 6px;
-        white-space: pre-wrap;
+        color: #1f2937;
+        font-size: 14px;
+        line-height: 1.7;
         overflow-wrap: anywhere;
-        background: #fafbfc;
+      }
+      #${PANEL_ID} .acn-preview-content > :first-child { margin-top: 0; }
+      #${PANEL_ID} .acn-preview-content > :last-child { margin-bottom: 0; }
+      #${PANEL_ID} .acn-preview-content p { margin: 0 0 12px; }
+      #${PANEL_ID} .acn-preview-content h1,
+      #${PANEL_ID} .acn-preview-content h2,
+      #${PANEL_ID} .acn-preview-content h3,
+      #${PANEL_ID} .acn-preview-content h4 {
+        margin: 22px 0 10px;
+        line-height: 1.35;
+        color: #111827;
+        font-weight: 700;
+      }
+      #${PANEL_ID} .acn-preview-content h1 { font-size: 22px; }
+      #${PANEL_ID} .acn-preview-content h2 { font-size: 19px; }
+      #${PANEL_ID} .acn-preview-content h3 { font-size: 16px; }
+      #${PANEL_ID} .acn-preview-content h4 { font-size: 14px; }
+      #${PANEL_ID} .acn-preview-content ul,
+      #${PANEL_ID} .acn-preview-content ol { margin: 8px 0 14px; padding-left: 24px; }
+      #${PANEL_ID} .acn-preview-content li { margin: 4px 0; }
+      #${PANEL_ID} .acn-preview-content li > p { margin: 0 0 5px; }
+      #${PANEL_ID} .acn-preview-content blockquote {
+        margin: 14px 0;
+        padding: 9px 14px;
+        border-left: 3px solid #93b4df;
+        border-radius: 0 5px 5px 0;
+        background: #f4f8fd;
+        color: #475569;
+      }
+      #${PANEL_ID} .acn-preview-content blockquote > :last-child { margin-bottom: 0; }
+      #${PANEL_ID} .acn-preview-content a { color: #0969da; text-decoration: none; }
+      #${PANEL_ID} .acn-preview-content a:hover { text-decoration: underline; }
+      #${PANEL_ID} .acn-preview-content code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #edf2f7;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+      #${PANEL_ID} .acn-preview-content pre {
+        margin: 14px 0;
+        padding: 14px 16px;
+        overflow-x: auto;
+        border: 1px solid #e0e7ef;
+        border-radius: 7px;
+        background: #f6f8fa;
+      }
+      #${PANEL_ID} .acn-preview-content pre code {
+        padding: 0;
+        background: transparent;
+        white-space: pre;
+      }
+      #${PANEL_ID} .acn-preview-content table {
+        display: block;
+        max-width: 100%;
+        margin: 14px 0;
+        overflow-x: auto;
+        border-collapse: collapse;
+      }
+      #${PANEL_ID} .acn-preview-content th,
+      #${PANEL_ID} .acn-preview-content td {
+        padding: 7px 11px;
+        border: 1px solid #dbe3ec;
+        text-align: left;
+        vertical-align: top;
+      }
+      #${PANEL_ID} .acn-preview-content th { background: #f1f5f9; font-weight: 650; }
+      #${PANEL_ID} .acn-preview-content tr:nth-child(even) { background: #fafbfd; }
+      #${PANEL_ID} .acn-preview-content hr { border: 0; border-top: 1px solid #e1e7ef; margin: 20px 0; }
+      #${PANEL_ID} .acn-preview-content img { max-width: 100%; height: auto; }
+      #${PANEL_ID} .acn-preview-content .katex { font-size: 1.08em; }
+      #${PANEL_ID} .acn-preview-content .katex-display,
+      #${PANEL_ID} .acn-preview-content .eqn {
+        max-width: 100%;
+        margin: 16px 0;
+        padding: 8px 0;
+        overflow-x: auto;
+        overflow-y: hidden;
       }
     `;
 
@@ -1067,6 +1163,8 @@
 
     const sequence = String(index + 1).padStart(3, "0");
     const preview = panel.querySelector(".acn-preview");
+    const render = window.__ACN_PREVIEW_RENDERER__?.renderMarkdown ||
+      ((content) => `<p>${escapeHtml(content)}</p>`);
     state.previewIndex = index;
     preview.innerHTML = `
       <div class="acn-preview-card" role="dialog" aria-modal="true">
@@ -1080,11 +1178,11 @@
         <div class="acn-preview-body">
           <div class="acn-preview-turn">
             <p class="acn-preview-role">#${sequence} User</p>
-            <pre class="acn-preview-content">${escapeHtml(cache.user.content)}</pre>
+            <div class="acn-preview-content">${render(cache.user.content)}</div>
           </div>
           <div class="acn-preview-turn">
             <p class="acn-preview-role">#${sequence} Assistant</p>
-            <pre class="acn-preview-content">${escapeHtml(cache.assistant.content)}</pre>
+            <div class="acn-preview-content">${render(cache.assistant.content)}</div>
           </div>
         </div>
       </div>
