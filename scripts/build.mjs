@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import postcss from "postcss";
@@ -25,12 +25,33 @@ const css = await readFile(path.join(katexDist, "katex.min.css"), "utf8");
 const scoped = await postcss([
   prefixSelector({ prefix: "#ai-conversation-navigator" })
 ]).process(css, { from: path.join(katexDist, "katex.min.css"), map: false });
-const cssWithFontUrls = scoped.css.replaceAll(
+scoped.root.walkAtRules("font-face", (rule) => {
+  rule.walkDecls("src", (declaration) => {
+    const woff2 = declaration.value.split(",")
+      .find((source) => source.includes(".woff2"));
+    if (!woff2) {
+      throw new Error(`Missing WOFF2 source in ${rule.toString()}`);
+    }
+    declaration.value = woff2.trim();
+  });
+});
+const cssWithFontUrls = scoped.root.toString().replaceAll(
   "url(fonts/",
   "url(chrome-extension://__MSG_@@extension_id__/dist/fonts/"
 );
 await writeFile(path.join(output, "katex.css"), cssWithFontUrls);
-await cp(path.join(katexDist, "fonts"), path.join(output, "fonts"), { recursive: true });
+const fontOutput = path.join(output, "fonts");
+await mkdir(fontOutput, { recursive: true });
+for (const font of await readdir(path.join(katexDist, "fonts"))) {
+  if (font.endsWith(".woff2")) {
+    await cp(path.join(katexDist, "fonts", font), path.join(fontOutput, font));
+  }
+}
+for (const font of await readdir(fontOutput)) {
+  if (font.endsWith(".woff") || font.endsWith(".ttf")) {
+    await unlink(path.join(fontOutput, font));
+  }
+}
 
 const licenses = [
   ["katex", "LICENSE"],

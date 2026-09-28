@@ -20,6 +20,7 @@ test("bundles local KaTeX fonts for the extension", () => {
   const css = readFileSync(path.join(__dirname, "../dist/katex.css"), "utf8");
   assert.ok(manifest.content_scripts[0].css.includes("dist/katex.css"));
   assert.ok(manifest.web_accessible_resources[0].resources.includes("dist/fonts/*"));
+  assert.doesNotMatch(css, /\.woff(?!2)|\.ttf/);
   const fontNames = Array.from(css.matchAll(/dist\/fonts\/([^)]*?)\.(?:woff2|woff|ttf)/g),
     (match) => match[0].slice("dist/".length));
   assert.ok(fontNames.length > 0);
