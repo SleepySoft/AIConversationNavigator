@@ -19,7 +19,7 @@
 
 - 对于已加载过的对话内容，可以直接点击列表的预览按钮查看；预览会排版 Markdown、表格、代码和数学公式 ---- 解决翻找时等待加内容加载的问题。
 > 如果插件的Progress没有显示100%，可以使用Auto scroll功能，让它从头到尾滚一遍，确保加载所有对话。
-> 旧版本已缓存的回复可能丢失了原网页的格式和公式源码。更新后重新打开相关对话，或使用 Auto scroll 重新采集，才能补齐这些内容。
+> 已有纯文本缓存的预览和导出会尽量整理公式、表格与代码块，但无法凭文本完全还原原网页。重新打开相关对话，或使用 Auto scroll 重新采集，才能补齐原始格式和公式源码。Navigator 标题旁显示当前实际运行的版本。
 
 - 只在每轮用户发送的内容前显示序号 ---- 和列表内容对照，让用户明确知道自己浏览的是第几轮对话。
 
@@ -35,4 +35,6 @@
 
 ## 开发
 
-扩展已包含构建好的 Markdown 和公式渲染资源，直接按上述步骤加载即可。修改 `src/preview-renderer.js` 或更新依赖后，运行 `npm ci && npm run build`，再重新加载扩展。运行 `npm test` 可检查预览渲染。
+扩展已包含构建好的 Markdown 和公式渲染资源，直接按上述步骤加载即可。修改 `src/preview-renderer.js`、`src/providers/` 或更新依赖后，运行 `npm ci && npm run build`，再重新加载扩展并刷新 Copilot 页面。运行 `npm test` 可检查预览渲染。
+
+`src/preview-renderer.js` 只负责把缓存中的 Markdown 渲染成预览 HTML。Copilot 页面 DOM 到 Markdown 的转换在 `src/providers/copilot-markdown.js`，旧版纯文本缓存的兼容处理在 `src/providers/copilot-legacy.js`，并由 `CopilotProvider` 调用。增加其他网站时，采集与特殊格式处理应放在对应 Provider 中，预览层复用同一个 Markdown 渲染器。

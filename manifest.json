@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Conversation Navigator",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Collect, outline, persist, and export AI conversations with coverage tracking.",
   "permissions": [],
   "host_permissions": [
@@ -18,6 +18,7 @@
       ],
       "js": [
         "dist/preview-renderer.js",
+        "dist/providers/copilot-markdown.js",
         "src/navigator.user.js"
       ],
       "css": ["dist/katex.css"],

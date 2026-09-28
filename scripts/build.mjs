@@ -20,6 +20,17 @@ await build({
   minify: true,
   legalComments: "eof"
 });
+await mkdir(path.join(output, "providers"), { recursive: true });
+await build({
+  entryPoints: [path.join(root, "src", "providers", "copilot-markdown.js")],
+  outfile: path.join(output, "providers", "copilot-markdown.js"),
+  bundle: true,
+  format: "iife",
+  platform: "browser",
+  target: "chrome120",
+  minify: true,
+  legalComments: "eof"
+});
 
 const css = await readFile(path.join(katexDist, "katex.min.css"), "utf8");
 const scoped = await postcss([

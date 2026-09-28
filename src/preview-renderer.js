@@ -1,9 +1,6 @@
 import MarkdownIt from "markdown-it";
 import texmath from "markdown-it-texmath";
 import katex from "katex";
-import TurndownService from "turndown";
-import { gfm } from "turndown-plugin-gfm";
-import { MathMLToLaTeX } from "mathml-to-latex";
 
 const markdown = new MarkdownIt({
   html: false,
@@ -49,76 +46,6 @@ markdown.renderer.rules.link_open = (tokens, index, options, environment, render
   return originalLinkOpen(tokens, index, options, environment, renderer);
 };
 
-const turndown = new TurndownService({
-  headingStyle: "atx",
-  codeBlockStyle: "fenced",
-  bulletListMarker: "-",
-  emDelimiter: "*"
-});
-turndown.use(gfm);
-
-// Turndown normally escapes backslashes (and square brackets) in text nodes.
-// Keep Copilot's literal TeX delimiters intact for the math parser.
-const escapedText = turndown.escape.bind(turndown);
-const mathDelimiters = new Map([
-  ["\\(", "\uE000"], ["\\)", "\uE001"],
-  ["\\[", "\uE002"], ["\\]", "\uE003"]
-]);
-turndown.escape = (text) => {
-  const protectedText = text.replace(/\\[()[\]]/g, (delimiter) => mathDelimiters.get(delimiter));
-  let result = escapedText(protectedText);
-  for (const [delimiter, marker] of mathDelimiters) {
-    result = result.replaceAll(marker, delimiter);
-  }
-  return result;
-};
-
-function mathSource(node) {
-  const math = node.matches("math") ? node : node.querySelector("math");
-  const annotation = math?.querySelector('annotation[encoding="application/x-tex"]');
-  const tex = node.getAttribute("data-latex") ||
-    node.getAttribute("data-tex") ||
-    annotation?.textContent ||
-    math?.getAttribute("alttext");
-  if (tex || !math) {
-    return tex || null;
-  }
-  try {
-    return MathMLToLaTeX.convert(math.outerHTML) || null;
-  } catch {
-    return null;
-  }
-}
-
-turndown.addRule("copilotMath", {
-  filter(node) {
-    return (node.matches("math, .katex, [data-latex], [data-tex]") &&
-      Boolean(mathSource(node)));
-  },
-  replacement(_content, node) {
-    const source = mathSource(node).trim();
-    const display = node.matches(".katex-display, .math-display") ||
-      Boolean(node.closest(".katex-display, .math-display"));
-    return display ? `\n\n$$\n${source}\n$$\n\n` : `$${source}$`;
-  }
-});
-
-function toMarkdown(element) {
-  const plainText = () => (element.innerText || element.textContent || "").trim();
-  // Some Copilot replies still contain literal Markdown in plain text nodes.
-  if (!element.querySelector(
-    "h1,h2,h3,h4,h5,h6,p,ul,ol,pre,code,table,blockquote,a,strong,em,math,.katex,[data-latex],[data-tex]"
-  )) {
-    return plainText();
-  }
-  try {
-    return turndown.turndown(element).trim() || plainText();
-  } catch (error) {
-    console.warn("[AI Conversation Navigator] Markdown conversion failed", error);
-    return plainText();
-  }
-}
-
 function renderMarkdown(source) {
   const content = String(source || "");
   try {
@@ -129,4 +56,4 @@ function renderMarkdown(source) {
   }
 }
 
-window.__ACN_PREVIEW_RENDERER__ = { toMarkdown, renderMarkdown };
+window.__ACN_PREVIEW_RENDERER__ = { renderMarkdown };

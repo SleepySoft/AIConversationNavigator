@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.4.0
+// @version      0.4.1
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -17,6 +17,7 @@
   }
 
   const PANEL_ID = "ai-conversation-navigator";
+  const SCRIPT_VERSION = "0.4.1";
   const STORAGE_NAME = "ai-conversation-navigator";
   const SESSION_STORE = "sessions";
   const SAVE_DELAY_MS = 800;
@@ -139,6 +140,13 @@
       return { userNodes, assistantNodes };
     }
 
+    extractAssistant(node) {
+      const adapter = window.__ACN_CONTENT_ADAPTERS__?.copilot;
+      return adapter
+        ? adapter.extractAssistantContent(node)
+        : { content: node.innerText.trim(), format: "text" };
+    }
+
     collectVisibleMessages() {
       const nodes = this.assignMessageIndexes(state.currentSession);
       const messages = [];
@@ -151,11 +159,10 @@
           .map((userNode) => userNode.innerText.trim())
           .filter(Boolean)
           .join("\n\n");
-        const renderer = window.__ACN_PREVIEW_RENDERER__;
-        const assistantContent = assistantNodes
-          .map((assistantNode) => renderer
-            ? renderer.toMarkdown(assistantNode)
-            : assistantNode.innerText.trim())
+        const assistantParts = assistantNodes.map((assistantNode) =>
+          this.extractAssistant(assistantNode));
+        const assistantContent = assistantParts
+          .map((part) => part.content)
           .filter(Boolean)
           .join("\n\n");
 
@@ -165,7 +172,8 @@
 
         if (assistantContent) {
           messages.push(createMessage(index, "assistant", assistantContent,
-            renderer ? "markdown" : "text"));
+            assistantParts.every((part) => part.format === "markdown")
+              ? "markdown" : "text"));
         }
 
         node.dataset.acnIndex = String(index);
@@ -320,6 +328,7 @@
     const messages = provider.collectVisibleMessages();
     let structureChanged = false;
     let contentChanged = false;
+    let formatChanged = false;
     session.visibleMap.clear();
 
     messages.forEach((message) => {
@@ -336,8 +345,9 @@
 
       if (existing.content !== message.content || existing.format !== message.format) {
         if (message.role !== "assistant" ||
-          (message.format === "markdown" && existing.format !== "markdown") ||
+          (message.format === "markdown" && needsFormatRecovery(session, existing)) ||
           message.content.length >= existing.content.length) {
+          formatChanged ||= existing.format !== message.format;
           existing.content = message.content;
           existing.format = message.format;
           contentChanged = true;
@@ -354,7 +364,11 @@
     } else if (contentChanged) {
       session.updatedAt = Date.now();
       scheduleSave(session);
-      updateJumpStates();
+      if (formatChanged) {
+        renderPanel();
+      } else {
+        updateJumpStates();
+      }
     } else {
       updateJumpStates();
     }
@@ -561,6 +575,15 @@
     };
   }
 
+  function needsFormatRecovery(session, message) {
+    if (!message || message.role !== "assistant") {
+      return false;
+    }
+    const adapter = window.__ACN_CONTENT_ADAPTERS__?.[session.platform];
+    return message.format !== "markdown" ||
+      Boolean(adapter?.looksLikeTextCache?.(message.content));
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replaceAll("&", "&amp;")
@@ -582,7 +605,7 @@
       <div class="acn-panel">
         <div class="acn-resize-handle" data-resize></div>
         <div class="acn-header">
-          <span class="acn-label">Navigator</span>
+          <span class="acn-label">Navigator <small>v${SCRIPT_VERSION}</small></span>
           <button class="acn-toggle" type="button">Show</button>
         </div>
         <div class="acn-body"></div>
@@ -658,6 +681,11 @@
       }
       #${PANEL_ID} .acn-label {
         font-weight: 650;
+      }
+      #${PANEL_ID} .acn-label small {
+        color: #6b7280;
+        font-size: 10px;
+        font-weight: 500;
       }
       #${PANEL_ID} .acn-body {
         flex: 1;
@@ -864,6 +892,16 @@
         font-size: 12px;
         font-weight: 650;
       }
+      #${PANEL_ID} .acn-preview-legacy-note {
+        margin: 0 0 14px;
+        padding: 9px 11px;
+        border: 1px solid #f7d6a1;
+        border-radius: 6px;
+        background: #fff8e8;
+        color: #7c4a03;
+        font-size: 12px;
+        line-height: 1.5;
+      }
       #${PANEL_ID} .acn-preview-content {
         color: #1f2937;
         font-size: 14px;
@@ -1046,6 +1084,8 @@
     const missing = session.coverage.missingRanges
       .slice(0, 5)
       .map((range) => range[0] === range[1] ? `${range[0]}` : `${range[0]}-${range[1]}`);
+    const legacyReplies = session.messages.filter((message) =>
+      needsFormatRecovery(session, message)).length;
     const previousBodyScrollTop = body.scrollTop;
     const previousOutline = body.querySelector(".acn-outline");
     const previousOutlineScrollTop = previousOutline ? previousOutline.scrollTop : 0;
@@ -1066,6 +1106,7 @@
         <p>
           ${missing.length ? `Missing: ${escapeHtml(missing.join(", "))}` : "Coverage complete"}
         </p>
+        ${legacyReplies ? `<p>${legacyReplies} text-only replies. Reload Copilot and try Auto scroll to recapture their formatting.</p>` : ""}
       </div>
       <div class="acn-section">
         <h3>Actions</h3>
@@ -1165,6 +1206,11 @@
     const preview = panel.querySelector(".acn-preview");
     const render = window.__ACN_PREVIEW_RENDERER__?.renderMarkdown ||
       ((content) => `<p>${escapeHtml(content)}</p>`);
+    const legacyAssistant = needsFormatRecovery(session, cache.assistant);
+    const adapter = window.__ACN_CONTENT_ADAPTERS__?.[session.platform];
+    const assistantPreview = legacyAssistant && adapter?.prepareLegacyPreview
+      ? adapter.prepareLegacyPreview(cache.assistant.content)
+      : cache.assistant.content;
     state.previewIndex = index;
     preview.innerHTML = `
       <div class="acn-preview-card" role="dialog" aria-modal="true">
@@ -1182,7 +1228,8 @@
           </div>
           <div class="acn-preview-turn">
             <p class="acn-preview-role">#${sequence} Assistant</p>
-            <div class="acn-preview-content">${render(cache.assistant.content)}</div>
+            ${legacyAssistant ? `<p class="acn-preview-legacy-note">This reply uses a text-only cache, so some formulas may be incomplete. Reload Copilot and try Auto scroll to recapture the original formatting.</p>` : ""}
+            <div class="acn-preview-content">${render(assistantPreview)}</div>
           </div>
         </div>
       </div>
@@ -1319,6 +1366,7 @@
     const messages = [...session.messages]
       .filter((message) => message.content && message.content.trim())
       .sort(sortMessages);
+    const adapter = window.__ACN_CONTENT_ADAPTERS__?.[session.platform];
     const markdown = [
       "---",
       `platform: ${session.platform}`,
@@ -1333,7 +1381,11 @@
         `## ${String(message.index + 1).padStart(3, "0")} ${message.role === "user" ? "User" : "Assistant"}`
       );
       markdown.push("");
-      markdown.push(message.content);
+      const content = needsFormatRecovery(session, message) &&
+        adapter?.prepareLegacyPreview
+        ? adapter.prepareLegacyPreview(message.content)
+        : message.content;
+      markdown.push(content);
       markdown.push("");
     });
 
@@ -1371,6 +1423,7 @@
   }
 
   window.__AI_CONVERSATION_NAVIGATOR__ = {
+    version: SCRIPT_VERSION,
     state,
     collect,
     exportMarkdown,
