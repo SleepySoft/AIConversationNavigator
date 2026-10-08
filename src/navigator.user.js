@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.4.1
+// @version      0.4.2
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -17,7 +17,7 @@
   }
 
   const PANEL_ID = "ai-conversation-navigator";
-  const SCRIPT_VERSION = "0.4.1";
+  const SCRIPT_VERSION = "0.4.2";
   const STORAGE_NAME = "ai-conversation-navigator";
   const SESSION_STORE = "sessions";
   const SAVE_DELAY_MS = 800;
@@ -69,6 +69,35 @@
         "";
     }
 
+    extractUserContent(node, userNodes = null) {
+      const targets = userNodes || this.getContentTargets(node).userNodes;
+      const text = targets
+        .map((userNode) => userNode.innerText.trim())
+        .filter(Boolean)
+        .join("\n\n");
+
+      if (text) {
+        return text;
+      }
+
+      // Copilot renders uploaded images beside the empty chatOutput element,
+      // so they must be read from the enclosing user-question container.
+      const question = node.matches?.('[data-testid="chatQuestion"]')
+        ? node
+        : node.querySelector('[data-testid="chatQuestion"]') ||
+          targets[0]?.closest('[data-testid="chatQuestion"]');
+      if (!question) {
+        return "";
+      }
+
+      const images = Array.from(question.querySelectorAll("img"));
+      return images.map((image) => {
+        const label = image.getAttribute("alt")?.trim() ||
+          image.closest('[role="button"][aria-label]')?.getAttribute("aria-label")?.trim();
+        return label ? `[Image: ${label}]` : "[Image]";
+      }).join("\n");
+    }
+
     assignMessageIndexes(session) {
       const nodes = this.getMessageNodes();
       if (!session) {
@@ -103,7 +132,7 @@
 
         if (index === null) {
           const { userNodes } = this.getContentTargets(node);
-          const userContent = userNodes.map((userNode) => userNode.innerText.trim()).join("\n\n");
+          const userContent = this.extractUserContent(node, userNodes);
           if (userContent && usersByContent.has(userContent)) {
             index = usersByContent.get(userContent);
           }
@@ -155,10 +184,7 @@
         const index = Number(node.dataset.acnIndex);
         const { userNodes, assistantNodes } = this.getContentTargets(node);
 
-        const userContent = userNodes
-          .map((userNode) => userNode.innerText.trim())
-          .filter(Boolean)
-          .join("\n\n");
+        const userContent = this.extractUserContent(node, userNodes);
         const assistantParts = assistantNodes.map((assistantNode) =>
           this.extractAssistant(assistantNode));
         const assistantContent = assistantParts

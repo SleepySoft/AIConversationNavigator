@@ -240,6 +240,43 @@ test("cached preview displays rendered Markdown and equations", async () => {
   dom.window.close();
 });
 
+test("records an image-only user turn together with its assistant reply", async () => {
+  const dom = new JSDOM(`<!doctype html><html><body>
+    <div data-testid="m365-chat-llm-web-ui-chat-message" data-message-index="0">
+      <div data-testid="chatQuestion">
+        <div role="article">
+          <div role="button" aria-label="image.png">
+            <img alt="image.png" src="data:image/png;base64,AA==">
+          </div>
+          <div data-testid="chatOutput"><br aria-hidden="true"></div>
+        </div>
+      </div>
+      <div data-testid="markdown-reply"><p>I can see the image.</p></div>
+    </div>
+  </body></html>`, {
+    url: "https://m365.cloud.microsoft/chat/conversation/image-only",
+    runScripts: "outside-only"
+  });
+  Object.defineProperty(dom.window.HTMLElement.prototype, "innerText", {
+    get() { return this.textContent; }
+  });
+  dom.window.indexedDB = new IDBFactory();
+  dom.window.eval(readFileSync(path.join(__dirname, "../dist/preview-renderer.js"), "utf8"));
+  dom.window.eval(readFileSync(path.join(__dirname, "../dist/providers/copilot-markdown.js"), "utf8"));
+  dom.window.eval(readFileSync(path.join(__dirname, "../src/navigator.user.js"), "utf8"));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const navigator = dom.window.__AI_CONVERSATION_NAVIGATOR__;
+  const session = navigator.state.currentSession;
+  assert.equal(session.messageMap.get("0|user")?.content, "[Image: image.png]");
+  assert.equal(session.messageMap.get("0|assistant")?.content, "I can see the image.");
+  assert.equal(session.coverage.progress, 100);
+  assert.equal(dom.window.document.querySelector(".acn-outline-title")?.textContent,
+    "[Image: image.png]");
+  assert.equal(dom.window.document.querySelector('[data-action="preview"]')?.disabled, false);
+  dom.window.close();
+});
+
 test("exports legacy Copilot replies as prepared Markdown text", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "https://m365.cloud.microsoft/chat/conversation/legacy",
