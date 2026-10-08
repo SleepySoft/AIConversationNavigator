@@ -21,6 +21,16 @@ function createRenderer() {
   };
 }
 
+async function waitFor(condition, message, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      assert.fail(message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("bundles local KaTeX fonts for the extension", () => {
   const manifest = require("../manifest.json");
   const css = readFileSync(path.join(__dirname, "../dist/katex.css"), "utf8");
@@ -217,9 +227,9 @@ test("cached preview displays rendered Markdown and equations", async () => {
   dom.window.eval(readFileSync(path.join(__dirname, "../dist/preview-renderer.js"), "utf8"));
   dom.window.eval(readFileSync(path.join(__dirname, "../dist/providers/copilot-markdown.js"), "utf8"));
   dom.window.eval(readFileSync(path.join(__dirname, "../src/navigator.user.js"), "utf8"));
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await waitFor(() => dom.window.document.querySelector('[data-action="preview"]'),
+    "preview button exists");
   const button = dom.window.document.querySelector('[data-action="preview"]');
-  assert.ok(button, "preview button exists");
   assert.equal(button.disabled, false);
   button.click();
   const preview = dom.window.document.querySelector(".acn-preview");
@@ -241,7 +251,9 @@ test("cached preview displays rendered Markdown and equations", async () => {
 });
 
 test("records an image-only user turn together with its assistant reply", async () => {
-  const dom = new JSDOM(`<!doctype html><html><body>
+  const dom = new JSDOM(`<!doctype html><html><head>
+    <title>const titleFromPreviousConversation = true;</title>
+  </head><body>
     <div data-testid="m365-chat-llm-web-ui-chat-message" data-message-index="0">
       <div data-testid="chatQuestion">
         <div role="article">
@@ -264,13 +276,17 @@ test("records an image-only user turn together with its assistant reply", async 
   dom.window.eval(readFileSync(path.join(__dirname, "../dist/preview-renderer.js"), "utf8"));
   dom.window.eval(readFileSync(path.join(__dirname, "../dist/providers/copilot-markdown.js"), "utf8"));
   dom.window.eval(readFileSync(path.join(__dirname, "../src/navigator.user.js"), "utf8"));
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await waitFor(() => dom.window.__AI_CONVERSATION_NAVIGATOR__.state.currentSession,
+    "image conversation session becomes ready");
 
   const navigator = dom.window.__AI_CONVERSATION_NAVIGATOR__;
   const session = navigator.state.currentSession;
   assert.equal(session.messageMap.get("0|user")?.content, "[Image: image.png]");
   assert.equal(session.messageMap.get("0|assistant")?.content, "I can see the image.");
   assert.equal(session.coverage.progress, 100);
+  assert.equal(session.title, "Image: image.png");
+  assert.equal(dom.window.document.querySelector(".acn-section .acn-title")?.textContent,
+    "Image: image.png");
   assert.equal(dom.window.document.querySelector(".acn-outline-title")?.textContent,
     "[Image: image.png]");
   assert.equal(dom.window.document.querySelector('[data-action="preview"]')?.disabled, false);
@@ -286,7 +302,8 @@ test("exports legacy Copilot replies as prepared Markdown text", async () => {
   dom.window.eval(readFileSync(path.join(__dirname, "../dist/preview-renderer.js"), "utf8"));
   dom.window.eval(readFileSync(path.join(__dirname, "../dist/providers/copilot-markdown.js"), "utf8"));
   dom.window.eval(readFileSync(path.join(__dirname, "../src/navigator.user.js"), "utf8"));
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await waitFor(() => dom.window.__AI_CONVERSATION_NAVIGATOR__.state.currentSession,
+    "legacy conversation session becomes ready");
 
   const session = dom.window.__AI_CONVERSATION_NAVIGATOR__.state.currentSession;
   const legacy = "主体\t资产\n银行\t贷款\n\nPlain Text\nA → B";

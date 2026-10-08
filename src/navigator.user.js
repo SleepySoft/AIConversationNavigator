@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.4.2
+// @version      0.4.3
 // @description  Copilot conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @run-at       document-idle
@@ -17,7 +17,7 @@
   }
 
   const PANEL_ID = "ai-conversation-navigator";
-  const SCRIPT_VERSION = "0.4.2";
+  const SCRIPT_VERSION = "0.4.3";
   const STORAGE_NAME = "ai-conversation-navigator";
   const SESSION_STORE = "sessions";
   const SAVE_DELAY_MS = 800;
@@ -277,6 +277,35 @@
     };
   }
 
+  function updateImageConversationTitle(session) {
+    const userMessages = session.messages.filter((message) => message.role === "user");
+    if (!userMessages.length) {
+      return false;
+    }
+
+    const imageLabels = [];
+    for (const message of userMessages) {
+      const lines = message.content.split(/\r?\n/).filter(Boolean);
+      if (!lines.length || lines.some((line) => !/^\[Image(?:: .*?)?\]$/.test(line))) {
+        return false;
+      }
+      lines.forEach((line) => {
+        const match = line.match(/^\[Image(?:: (.*?))?\]$/);
+        imageLabels.push(match?.[1] || "");
+      });
+    }
+
+    const title = imageLabels.length === 1
+      ? (imageLabels[0] ? `Image: ${imageLabels[0]}` : "Image conversation")
+      : `Image conversation (${imageLabels.length} images)`;
+    if (session.title === title) {
+      return false;
+    }
+
+    session.title = title;
+    return true;
+  }
+
   function compressRanges(values) {
     if (!values.length) {
       return [];
@@ -381,10 +410,14 @@
       }
     });
 
-    if (structureChanged) {
+    const titleChanged = updateImageConversationTitle(session);
+
+    if (structureChanged || titleChanged) {
       session.updatedAt = Date.now();
-      session.messages.sort(sortMessages);
-      calculateCoverage(session);
+      if (structureChanged) {
+        session.messages.sort(sortMessages);
+        calculateCoverage(session);
+      }
       scheduleSave(session);
       renderPanel();
     } else if (contentChanged) {
