@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.4.3
-// @description  Copilot conversation collection, outline, coverage, persistence, and export
+// @version      0.5.0
+// @description  AI conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
+// @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
 // @noframes
@@ -17,7 +18,7 @@
   }
 
   const PANEL_ID = "ai-conversation-navigator";
-  const SCRIPT_VERSION = "0.4.3";
+  const SCRIPT_VERSION = "0.5.0";
   const STORAGE_NAME = "ai-conversation-navigator";
   const SESSION_STORE = "sessions";
   const SAVE_DELAY_MS = 800;
@@ -40,9 +41,17 @@
       return location.hostname.includes("m365.cloud.microsoft");
     }
 
+    getPlatform() {
+      return "copilot";
+    }
+
     getConversationId() {
       const match = location.pathname.match(/conversation\/([^/]+)/);
       return match ? match[1] : "unknown";
+    }
+
+    getScrollSelector(index) {
+      return `[data-testid="m365-chat-llm-web-ui-chat-message"][data-acn-index="${index}"]`;
     }
 
     getConversationTitle() {
@@ -242,17 +251,236 @@
     }
   }
 
-  const providers = [new CopilotProvider()];
+  class ChatGPTProvider {
+    match() {
+      return location.hostname.includes("chatgpt.com");
+    }
+
+    getPlatform() {
+      return "chatgpt";
+    }
+
+    getConversationId() {
+      const match = location.pathname.match(/\/c\/([^/?#]+)/);
+      return match ? match[1] : "unknown";
+    }
+
+    getConversationTitle() {
+      return document.title.trim() || "Untitled conversation";
+    }
+
+    getScrollSelector(index) {
+      return `[data-talvt-turn-state][data-acn-index="${index}"]`;
+    }
+
+    getMessageNodes() {
+      return Array.from(document.querySelectorAll("[data-talvt-turn-state]"));
+    }
+
+    getOutermostMatches(node, selector) {
+      const matches = Array.from(node.querySelectorAll(selector));
+      return matches.filter((match) =>
+        !matches.some((other) => other !== match && other.contains(match))
+      );
+    }
+
+    getContentTargets(node) {
+      let assistantNodes = this.getOutermostMatches(node, "[data-response-body]");
+      if (!assistantNodes.length) {
+        assistantNodes = this.getOutermostMatches(
+          node,
+          '[data-markdown-text-style="assistant-message"]'
+        );
+      }
+      const userNodes = this.getOutermostMatches(node, '[data-user-message-bubble="true"]');
+      return { userNodes, assistantNodes };
+    }
+
+    getStableNodeKey(node) {
+      const ids = Array.from(node.querySelectorAll("[data-chatgpt-search-message-ids]"))
+        .map((element) => element.getAttribute("data-chatgpt-search-message-ids"))
+        .filter(Boolean);
+      return ids.length ? ids.join(",") : "";
+    }
+
+    getTurnNumber(node) {
+      const unit = node.querySelector("[data-chatgpt-search-unit-key]");
+      const key = unit?.getAttribute("data-chatgpt-search-unit-key") || "";
+      const match = key.match(/turn-(\d+):/);
+      return match ? Number(match[1]) : null;
+    }
+
+    extractUserContent(node, userNodes = null) {
+      const targets = userNodes || this.getContentTargets(node).userNodes;
+      const text = targets
+        .map((userNode) => userNode.innerText.trim())
+        .filter(Boolean)
+        .join("\n\n");
+
+      if (text) {
+        return text;
+      }
+
+      // Image-only messages render attachments outside the text bubble.
+      const holders = targets.length
+        ? targets
+        : this.getOutermostMatches(node, '[data-chatgpt-search-unit-key$=":user"]');
+      const images = holders.flatMap((holder) => Array.from(holder.querySelectorAll("img")));
+      return images.map((image) => {
+        const label = image.getAttribute("alt")?.trim() ||
+          image.closest('[aria-label]')?.getAttribute("aria-label")?.trim();
+        return label ? `[Image: ${label}]` : "[Image]";
+      }).join("\n");
+    }
+
+    assignMessageIndexes(session) {
+      const nodes = this.getMessageNodes();
+      if (!session) {
+        return nodes;
+      }
+
+      const usersByContent = new Map(
+        session.messages
+          .filter((message) => message.role === "user")
+          .map((message) => [message.content, message.index])
+      );
+      const stableKeys = session.stableNodeKeys instanceof Map
+        ? session.stableNodeKeys
+        : new Map();
+      const assigned = new Set();
+      let nextIndex = session.messages.reduce(
+        (max, message) => Math.max(max, message.index + 1),
+        0
+      );
+
+      nodes.forEach((node) => {
+        const rawIndex = node.getAttribute("data-acn-index");
+        const parsedIndex = rawIndex === null || rawIndex === "" ? NaN : Number(rawIndex);
+        const stableKey = this.getStableNodeKey(node);
+        let index = null;
+
+        if (Number.isInteger(parsedIndex) && parsedIndex >= 0) {
+          index = parsedIndex;
+        } else if (stableKey && stableKeys.has(stableKey)) {
+          index = stableKeys.get(stableKey);
+        }
+
+        if (index === null) {
+          index = this.getTurnNumber(node);
+        }
+
+        if (index === null) {
+          const { userNodes } = this.getContentTargets(node);
+          const userContent = this.extractUserContent(node, userNodes);
+          if (userContent && usersByContent.has(userContent)) {
+            index = usersByContent.get(userContent);
+          }
+        }
+
+        if (index === null || assigned.has(index)) {
+          index = nextIndex;
+          nextIndex += 1;
+        }
+
+        assigned.add(index);
+        if (stableKey) {
+          stableKeys.set(stableKey, index);
+        }
+        node.dataset.acnIndex = String(index);
+      });
+
+      session.stableNodeKeys = stableKeys;
+      return nodes;
+    }
+
+    extractAssistant(node) {
+      const adapter = window.__ACN_CONTENT_ADAPTERS__?.chatgpt;
+      return adapter
+        ? adapter.extractAssistantContent(node)
+        : { content: node.innerText.trim(), format: "text" };
+    }
+
+    collectVisibleMessages() {
+      const nodes = this.assignMessageIndexes(state.currentSession);
+      const messages = [];
+
+      nodes.forEach((node) => {
+        const index = Number(node.dataset.acnIndex);
+        const { userNodes, assistantNodes } = this.getContentTargets(node);
+
+        const userContent = this.extractUserContent(node, userNodes);
+        const assistantParts = assistantNodes.map((assistantNode) =>
+          this.extractAssistant(assistantNode));
+        const assistantContent = assistantParts
+          .map((part) => part.content)
+          .filter(Boolean)
+          .join("\n\n");
+
+        if (userContent) {
+          messages.push(createMessage(index, "user", userContent));
+        }
+
+        if (assistantContent) {
+          messages.push(createMessage(index, "assistant", assistantContent,
+            assistantParts.every((part) => part.format === "markdown")
+              ? "markdown" : "text"));
+        }
+
+        node.dataset.acnIndex = String(index);
+      });
+
+      return messages;
+    }
+
+    getLoadedIndexes() {
+      const loadedIndexes = new Set();
+
+      this.assignMessageIndexes(state.currentSession).forEach((node) => {
+        loadedIndexes.add(Number(node.dataset.acnIndex));
+      });
+
+      return loadedIndexes;
+    }
+
+    getCurrentIndex() {
+      let currentIndex = null;
+      let largestVisibleArea = 0;
+
+      this.assignMessageIndexes(state.currentSession).forEach((node) => {
+        const index = Number(node.dataset.acnIndex);
+        const rect = node.getBoundingClientRect();
+
+        if (rect.width > 0 && rect.height > 0) {
+          const visibleWidth = Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0);
+          const visibleHeight = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+          const visibleArea = Math.max(0, visibleWidth) * Math.max(0, visibleHeight);
+
+          if (visibleArea > largestVisibleArea) {
+            largestVisibleArea = visibleArea;
+            currentIndex = index;
+          }
+        }
+      });
+
+      return currentIndex;
+    }
+  }
+
+  const providers = [new CopilotProvider(), new ChatGPTProvider()];
 
   function activeProvider() {
     return providers.find((provider) => provider.match()) || null;
   }
 
   function createSession(id, title) {
+    const provider = activeProvider();
+    const platform = provider && typeof provider.getPlatform === "function"
+      ? provider.getPlatform()
+      : "copilot";
     return {
       id,
       title,
-      platform: "copilot",
+      platform,
       messages: [],
       messageMap: new Map(),
       visibleMap: new Map(),
@@ -1165,7 +1393,7 @@
         <p>
           ${missing.length ? `Missing: ${escapeHtml(missing.join(", "))}` : "Coverage complete"}
         </p>
-        ${legacyReplies ? `<p>${legacyReplies} text-only replies. Reload Copilot and try Auto scroll to recapture their formatting.</p>` : ""}
+        ${legacyReplies ? `<p>${legacyReplies} text-only replies. Reload this page and try Auto scroll to recapture their formatting.</p>` : ""}
       </div>
       <div class="acn-section">
         <h3>Actions</h3>
@@ -1287,7 +1515,7 @@
           </div>
           <div class="acn-preview-turn">
             <p class="acn-preview-role">#${sequence} Assistant</p>
-            ${legacyAssistant ? `<p class="acn-preview-legacy-note">This reply uses a text-only cache, so some formulas may be incomplete. Reload Copilot and try Auto scroll to recapture the original formatting.</p>` : ""}
+            ${legacyAssistant ? `<p class="acn-preview-legacy-note">This reply uses a text-only cache, so some formulas may be incomplete. Reload this page and try Auto scroll to recapture the original formatting.</p>` : ""}
             <div class="acn-preview-content">${render(assistantPreview)}</div>
           </div>
         </div>
@@ -1402,9 +1630,11 @@
   }
 
   function scrollToMessage(index) {
-    const node = document.querySelector(
-      `[data-testid="m365-chat-llm-web-ui-chat-message"][data-acn-index="${index}"]`
-    );
+    const provider = activeProvider();
+    const selector = provider && typeof provider.getScrollSelector === "function"
+      ? provider.getScrollSelector(index)
+      : `[data-acn-index="${index}"]`;
+    const node = document.querySelector(selector);
 
     if (!node) {
       return;

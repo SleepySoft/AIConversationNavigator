@@ -330,3 +330,159 @@ test("exports legacy Copilot replies as prepared Markdown text", async () => {
   assert.equal(session.messages[1].content, legacy);
   dom.window.close();
 });
+
+
+function createChatGPTAdapter() {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://chatgpt.com/c/example",
+    runScripts: "outside-only"
+  });
+  const bundle = readFileSync(path.join(__dirname, "../dist/providers/chatgpt-markdown.js"), "utf8");
+  dom.window.eval(bundle);
+  return {
+    dom,
+    chatgpt: dom.window.__ACN_CONTENT_ADAPTERS__.chatgpt
+  };
+}
+
+test("converts ChatGPT DIL response content and strips action chrome", () => {
+  const { dom, chatgpt } = createChatGPTAdapter();
+  const response = dom.window.document.createElement("div");
+  response.innerHTML = `<div data-response-body="msg-1">
+    <div data-markdown-text-style="assistant-message">
+      <p data-d-component="text">PS5 可以输出声音。<span><strong>没有 3.5mm 接口。</strong></span></p>
+      <h2 data-d-component="title"><strong>一、方案</strong></h2>
+      <div data-d-component="table"><div data-d-table-viewport="true"><table><tbody>
+        <tr><th>方案</th><th>设备</th></tr>
+        <tr><td>A</td><td>B</td></tr>
+      </tbody></table></div></div>
+      <button type="button">Copy</button>
+    </div>
+  </div>`;
+  const extracted = chatgpt.extractAssistantContent(response);
+  assert.equal(extracted.format, "markdown");
+  assert.match(extracted.content, /\*\*没有 3\.5mm 接口。\*\*/);
+  assert.match(extracted.content, /## \*\*一、方案\*\*/);
+  assert.match(extracted.content, /\| 方案 \| 设备 \|/);
+  assert.doesNotMatch(extracted.content, /Copy/);
+  dom.window.close();
+});
+
+test("collects a ChatGPT conversation with turn indexes and exports chatgpt platform", async () => {
+  const dom = new JSDOM(`<!doctype html><html><head><title>测试对话</title></head><body>
+    <div class="thread-scroll-container">
+      <div data-talvt-turn-state="complete">
+        <div data-chatgpt-search-unit-key="fallback-turn-0:0:user" data-chatgpt-search-message-ids="u-1">
+          <div data-user-message-bubble="true"><div>问题一</div></div>
+          <div aria-label="复制消息"></div>
+        </div>
+        <div data-chatgpt-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-message-ids="a-1">
+          <h4 data-conversation-role="assistant">ChatGPT 说：</h4>
+          <div data-response-body="a-1">
+            <div data-markdown-text-style="assistant-message">
+              <p data-d-component="text">答案一</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div data-talvt-turn-state="complete">
+        <div data-chatgpt-search-unit-key="fallback-turn-1:0:user" data-chatgpt-search-message-ids="u-2">
+          <div data-user-message-bubble="true"><div>问题二</div></div>
+        </div>
+        <div data-chatgpt-search-unit-key="fallback-turn-1:2:assistant" data-chatgpt-search-message-ids="a-2">
+          <h4 data-conversation-role="assistant">ChatGPT 说：</h4>
+          <div data-response-body="a-2">
+            <div data-markdown-text-style="assistant-message">
+              <p data-d-component="text">答案二</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body></html>`, {
+    url: "https://chatgpt.com/c/6af7af36-example",
+    runScripts: "outside-only"
+  });
+  Object.defineProperty(dom.window.HTMLElement.prototype, "innerText", {
+    get() { return this.textContent; }
+  });
+  dom.window.indexedDB = new IDBFactory();
+  dom.window.eval(readFileSync(path.join(__dirname, "../dist/preview-renderer.js"), "utf8"));
+  dom.window.eval(readFileSync(path.join(__dirname, "../dist/providers/chatgpt-markdown.js"), "utf8"));
+  dom.window.eval(readFileSync(path.join(__dirname, "../src/navigator.user.js"), "utf8"));
+  await waitFor(() => dom.window.__AI_CONVERSATION_NAVIGATOR__.state.currentSession,
+    "chatgpt session becomes ready");
+
+  const navigator = dom.window.__AI_CONVERSATION_NAVIGATOR__;
+  const session = navigator.state.currentSession;
+  assert.equal(session.platform, "chatgpt");
+  assert.equal(session.title, "测试对话");
+  assert.equal(session.messageMap.get("0|user")?.content, "问题一");
+  assert.equal(session.messageMap.get("0|assistant")?.content, "答案一");
+  assert.equal(session.messageMap.get("1|user")?.content, "问题二");
+  assert.equal(session.messageMap.get("1|assistant")?.content, "答案二");
+  assert.equal(session.coverage.progress, 100);
+  assert.equal(dom.window.document.querySelectorAll(".acn-outline-item").length, 2);
+
+  let exportedBlob;
+  dom.window.URL.createObjectURL = (blob) => {
+    exportedBlob = blob;
+    return "blob:chatgpt-test";
+  };
+  dom.window.URL.revokeObjectURL = () => {};
+  dom.window.HTMLAnchorElement.prototype.click = () => {};
+  navigator.exportMarkdown();
+  const reader = new dom.window.FileReader();
+  const exported = await new Promise((resolve, reject) => {
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(exportedBlob);
+  });
+  assert.match(exported, /platform: chatgpt/);
+  assert.match(exported, /## 001 User\n\n问题一/);
+  assert.match(exported, /## 002 Assistant\n\n答案二/);
+  dom.window.close();
+});
+
+
+test("records a ChatGPT image-only user turn via its attachment block", async () => {
+  const dom = new JSDOM(`<!doctype html><html><head><title>附件对话</title></head><body>
+    <div data-talvt-turn-state="complete">
+      <div data-chatgpt-search-unit-key="fallback-turn-0:0:user" data-chatgpt-search-message-ids="u-img">
+        <div class="group/user-message flex flex-col items-end gap-2">
+          <div>
+            <button type="button" aria-label="用户附件">
+              <img alt="用户附件" src="blob:fake">
+            </button>
+          </div>
+          <div aria-label="复制消息"></div>
+        </div>
+      </div>
+      <div data-chatgpt-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-message-ids="a-img">
+        <div data-response-body="a-img">
+          <div data-markdown-text-style="assistant-message">
+            <p data-d-component="text">看到了截图。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body></html>`, {
+    url: "https://chatgpt.com/c/image-only",
+    runScripts: "outside-only"
+  });
+  Object.defineProperty(dom.window.HTMLElement.prototype, "innerText", {
+    get() { return this.textContent; }
+  });
+  dom.window.indexedDB = new IDBFactory();
+  dom.window.eval(readFileSync(path.join(__dirname, "../dist/preview-renderer.js"), "utf8"));
+  dom.window.eval(readFileSync(path.join(__dirname, "../dist/providers/chatgpt-markdown.js"), "utf8"));
+  dom.window.eval(readFileSync(path.join(__dirname, "../src/navigator.user.js"), "utf8"));
+  await waitFor(() => dom.window.__AI_CONVERSATION_NAVIGATOR__.state.currentSession,
+    "image conversation session becomes ready");
+
+  const session = dom.window.__AI_CONVERSATION_NAVIGATOR__.state.currentSession;
+  assert.equal(session.messageMap.get("0|user")?.content, "[Image: 用户附件]");
+  assert.equal(session.messageMap.get("0|assistant")?.content, "看到了截图。");
+  assert.equal(session.coverage.progress, 100);
+  dom.window.close();
+});

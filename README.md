@@ -8,7 +8,7 @@
 
 网上有不少GPT网页对话增强工具，但针对Copilot的工具我没找到。好在有AI，而且写个满足我需求的插件又不难，于是我自己弄了一个。
 
-当然，在架构设计阶段我已预留相应的扩展接口，使其能够较为轻松地适配其他 AI 网页平台。接下来视情况可能会加入其它AI平台的支持。
+当然，在架构设计阶段我已预留相应的扩展接口，使其能够较为轻松地适配其他 AI 网页平台。目前除 Copilot 外也支持 ChatGPT（chatgpt.com 对话页面）。
 
 这是个Chrome插件，大家完全可以让AI改造成Edge等chome内核浏览器可用的插件，并定制自己的功能。本插件实现的功能和解决的痛点如下：
 
@@ -32,11 +32,11 @@
 3. 开启 Developer mode
 4. 点击 Load unpacked
 5. 选择本仓库根目录
-6. 打开 https://m365.cloud.microsoft/chat
+6. 打开 https://m365.cloud.microsoft/chat 或 https://chatgpt.com/ 并进入一个对话
 7. 展开页面右下角的 Navigator 面板
 
 ## 开发
 
 扩展已包含构建好的 Markdown 和公式渲染资源，直接按上述步骤加载即可。修改 `src/preview-renderer.js`、`src/providers/` 或更新依赖后，运行 `npm ci && npm run build`，再重新加载扩展并刷新 Copilot 页面。运行 `npm test` 可检查预览渲染。
 
-`src/preview-renderer.js` 只负责把缓存中的 Markdown 渲染成预览 HTML。Copilot 页面 DOM 到 Markdown 的转换在 `src/providers/copilot-markdown.js`，旧版纯文本缓存的兼容处理在 `src/providers/copilot-legacy.js`，并由 `CopilotProvider` 调用。增加其他网站时，采集与特殊格式处理应放在对应 Provider 中，预览层复用同一个 Markdown 渲染器。
+`src/preview-renderer.js` 只负责把缓存中的 Markdown 渲染成预览 HTML。Copilot 页面 DOM 到 Markdown 的转换在 `src/providers/copilot-markdown.js`，旧版纯文本缓存的兼容处理在 `src/providers/copilot-legacy.js`，并由 `CopilotProvider` 调用。ChatGPT 的支持由 `ChatGPTProvider`（`src/navigator.user.js`）和 `src/providers/chatgpt-markdown.js` 提供，Turndown 与公式处理共用 `src/providers/markdown-shared.js`。增加其他网站时，采集与特殊格式处理应放在对应 Provider 中，预览层复用同一个 Markdown 渲染器。
