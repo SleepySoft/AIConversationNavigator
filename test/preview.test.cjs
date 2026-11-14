@@ -353,8 +353,8 @@ test("converts ChatGPT DIL response content and strips action chrome", () => {
       <p data-d-component="text">PS5 可以输出声音。<span><strong>没有 3.5mm 接口。</strong></span></p>
       <h2 data-d-component="title"><strong>一、方案</strong></h2>
       <div data-d-component="table"><div data-d-table-viewport="true"><table><tbody>
-        <tr><th>方案</th><th>设备</th></tr>
-        <tr><td>A</td><td>B</td></tr>
+        <tr><th data-d-component="table-cell"><p data-d-component="text">方案</p></th><th data-d-component="table-cell"><p data-d-component="text">设备</p></th></tr>
+        <tr><td data-d-component="table-cell"><p data-d-component="text"><code>A</code></p></td><td data-d-component="table-cell"><p data-d-component="text">B</p></td></tr>
       </tbody></table></div></div>
       <button type="button">Copy</button>
     </div>
@@ -364,7 +364,15 @@ test("converts ChatGPT DIL response content and strips action chrome", () => {
   assert.match(extracted.content, /\*\*没有 3\.5mm 接口。\*\*/);
   assert.match(extracted.content, /## \*\*一、方案\*\*/);
   assert.match(extracted.content, /\| 方案 \| 设备 \|/);
+  assert.match(extracted.content, /\| `A` \| B \|/);
   assert.doesNotMatch(extracted.content, /Copy/);
+  const tableLines = extracted.content.split("\n").filter((line) => line.includes("|"));
+  assert.ok(tableLines.every((line) => /^\s*\|.*\|\s*$/.test(line)),
+    `table rows must be single lines: ${extracted.content}`);
+  assert.equal(chatgpt.looksLikeTextCache(extracted.content), false);
+  assert.equal(chatgpt.looksLikeTextCache("| \n日志内容\n\n | \n\n结果\n\n |\n| --- | --- |"), true);
+  assert.equal(chatgpt.looksLikeTextCache("| A | B |\n| --- | --- |\n| 1 | 2 |\n\nafter"), false);
+  assert.equal(chatgpt.looksLikeTextCache("```\n| not a table\nvalue\n```"), false);
   dom.window.close();
 });
 

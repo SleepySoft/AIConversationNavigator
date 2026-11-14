@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Conversation Navigator
 // @namespace    https://github.com/local/ai-conversation-navigator
-// @version      0.5.0
+// @version      0.5.1
 // @description  AI conversation collection, outline, coverage, persistence, and export
 // @match        https://m365.cloud.microsoft/*
 // @match        https://chatgpt.com/*
@@ -18,7 +18,7 @@
   }
 
   const PANEL_ID = "ai-conversation-navigator";
-  const SCRIPT_VERSION = "0.5.0";
+  const SCRIPT_VERSION = "0.5.1";
   const STORAGE_NAME = "ai-conversation-navigator";
   const SESSION_STORE = "sessions";
   const SAVE_DELAY_MS = 800;
@@ -1393,7 +1393,7 @@
         <p>
           ${missing.length ? `Missing: ${escapeHtml(missing.join(", "))}` : "Coverage complete"}
         </p>
-        ${legacyReplies ? `<p>${legacyReplies} text-only replies. Reload this page and try Auto scroll to recapture their formatting.</p>` : ""}
+        ${legacyReplies ? `<p>${legacyReplies} cached replies may need recapture. Reload this page and try Auto scroll to refresh their formatting.</p>` : ""}
       </div>
       <div class="acn-section">
         <h3>Actions</h3>
@@ -1515,7 +1515,7 @@
           </div>
           <div class="acn-preview-turn">
             <p class="acn-preview-role">#${sequence} Assistant</p>
-            ${legacyAssistant ? `<p class="acn-preview-legacy-note">This reply uses a text-only cache, so some formulas may be incomplete. Reload this page and try Auto scroll to recapture the original formatting.</p>` : ""}
+            ${legacyAssistant ? `<p class="acn-preview-legacy-note">This cached reply may have incomplete formatting. Reload this page and try Auto scroll to recapture the original rendering.</p>` : ""}
             <div class="acn-preview-content">${render(assistantPreview)}</div>
           </div>
         </div>
